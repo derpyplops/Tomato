@@ -112,9 +112,6 @@ class Encoder:
         )
 
         # Decode the bytetext back into a string.
-        try:
-            estimated_plaintext = estimated_bytetext.decode("utf-8")
-        except UnicodeDecodeError:
-            estimated_plaintext = "Estimated bytetext is not valid UTF-8."
+        estimated_plaintext = estimated_bytetext.decode("utf-8", errors="replace")
 
         return estimated_plaintext, estimated_bytetext
