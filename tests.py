@@ -21,7 +21,7 @@ testcases = [
     TestCase(
         model_name='gpt2',
         prompt="Q: How do you peel an apple?\nA: ",
-        cipher_len=50,
+        cipher_len=40,
         plaintext="affair"
     ),
 
