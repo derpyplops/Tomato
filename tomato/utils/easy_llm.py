@@ -49,7 +49,7 @@ class EasyLLM:
             model_name,
             temperature=1.0,
             do_sample=True,
-            torch_dtype=torch.bfloat16,
+            torch_dtype=torch.float32,
         )
         tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
         return model, tokenizer
