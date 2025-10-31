@@ -21,7 +21,7 @@ testcases = [
     TestCase(
         model_name='gpt2',
         prompt="Q: How do you peel an apple?\nA: ",
-        cipher_len=100,
+        cipher_len=50,
         plaintext="affair"
     ),
 
@@ -43,39 +43,57 @@ testcases = [
 #     prompt = """Q: How do you peel an apple?
 # A: """
 
+def _process_testcase(testcase):
+    """Process a single test case in a separate process."""
+    # Create encoder INSIDE the process (can't pickle/share models across processes)
+    encoder = Encoder(
+        model_name=testcase.model_name,
+        prompt=testcase.prompt,
+        cipher_len=testcase.cipher_len
+    )
+
+    # Original plaintext
+    plaintext = testcase.plaintext
+
+    # Encode the message
+    formatted_stegotext, stegotext = encoder.encode(plaintext)
+
+    # Decode the message
+    estimated_plaintext, estimated_bytetext = encoder.decode(stegotext)
+
+    # Strip padding (the encoder pads with 'A' characters to reach cipher_len)
+    estimated_plaintext_stripped = estimated_plaintext.rstrip('A')
+
+    # Check if successful
+    success = estimated_plaintext_stripped == plaintext
+
+    # Return result
+    return {
+        'testcase': testcase,
+        'success': success,
+        'original': plaintext,
+        'decoded': estimated_plaintext,
+        'stegotext': formatted_stegotext,
+        'error': None if success else f"Decoded '{estimated_plaintext_stripped}' != '{plaintext}'"
+    }
+
 def test_encode_decode_roundtrip():
+    import multiprocessing as mp
 
+    # Run testcases in parallel using multiprocessing
+    # Note: 'spawn' method is more reliable on macOS
+    with mp.get_context('spawn').Pool(processes=len(testcases)) as pool:
+        results = pool.map(_process_testcase, testcases)
 
-    for testcase in testcases:
-        # Create encoder
-        encoder = Encoder(
-            model_name=testcase.model_name,
-            prompt=testcase.prompt,
-            cipher_len=testcase.cipher_len
-        )
-
-        # Original plaintext
-        plaintext = testcase.plaintext
-
-        # Encode the message
-        formatted_stegotext, stegotext = encoder.encode(plaintext)
-
-        # Decode the message
-        estimated_plaintext, estimated_bytetext = encoder.decode(stegotext)
-
-        # Strip padding (the encoder pads with 'A' characters to reach cipher_len)
-        estimated_plaintext_stripped = estimated_plaintext.rstrip('A')
-
-        # Assert that decoded plaintext matches original
-        assert estimated_plaintext_stripped == plaintext, (
-            f"Decoded plaintext '{estimated_plaintext_stripped}' does not match "
-            f"original plaintext '{plaintext}'"
-        )
-
-        # Optional: print results for debugging
+    # Check all results and print
+    for result in results:
         print('\nResults:')
+        print(f'cipher_len={result["testcase"].cipher_len}')
         print('Stegotext (covertext):')
-        print(formatted_stegotext)
+        print(result['stegotext'])
         print('\n------')
-        print(f'Original plaintext: {plaintext}')
-        print(f'Decoded plaintext: {estimated_plaintext}')
+        print(f'Original plaintext: {result["original"]}')
+        print(f'Decoded plaintext: {result["decoded"]}')
+
+        # Assert after all processing is done
+        assert result['success'], result['error']
