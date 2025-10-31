@@ -1,0 +1,3 @@
+[console_scripts]
+tomato-decode = tomato.cli:main
+tomato-encode = tomato.cli:main

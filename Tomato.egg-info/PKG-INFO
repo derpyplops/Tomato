@@ -1,0 +1,13 @@
+Metadata-Version: 2.4
+Name: Tomato
+Version: 0.2.1
+Home-page: https://github.com/user1342/Tomato
+Classifier: Programming Language :: Python :: 3
+Classifier: License :: OSI Approved :: GPL-3.0
+Classifier: Operating System :: Ubuntu
+Requires-Python: >=3.8
+License-File: LICENSE
+Dynamic: classifier
+Dynamic: home-page
+Dynamic: license-file
+Dynamic: requires-python
