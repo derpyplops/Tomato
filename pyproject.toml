@@ -1,0 +1,31 @@
+[project]
+name = "tomato"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "tqdm",
+    "setuptools",
+    "huggingface_hub",
+    "numpy",
+    "pyyaml",
+    "bitsandbytes>=0.39.0",
+    "accelerate>=0.16.0,<1",
+    "transformers[torch]>=4.28.1",
+    "torch>=1.13.1",
+    "torchvision",
+    "torchaudio",
+    "mec @ git+https://github.com/user1342/mec",
+    "pytest",
+]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu118"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch" }
+torchvision = { index = "pytorch" }
+torchaudio = { index = "pytorch" }
