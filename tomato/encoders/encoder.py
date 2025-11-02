@@ -5,7 +5,7 @@ from tomato.utils.model_marginal import ModelMarginal
 from tomato.utils.debug_logger import FIMECDebugLogger
 from mec import FIMEC
 import numpy as np
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Dict, List
 
 class Encoder:
     """
@@ -63,16 +63,87 @@ class Encoder:
         # FIMEC defines the communication protocol between the sender and receiver.
         self._imec = FIMEC(ciphertext_dist, self._covertext_dist)
 
-    def encode(self, plaintext: str = "Attack at dawn!", debug: bool = False) -> Tuple[str, np.ndarray]:
+    def _calculate_failure_probabilities(self, posterior, original_ciphertext: List[int]) -> Dict:
+        """
+        Calculate per-byte and overall failure probabilities from posterior distributions.
+
+        This function computes the probability that decoding will fail for each byte
+        and overall, based on the posterior distributions after encoding.
+
+        Args:
+            posterior: FactoredPosterior object with component_distributions attribute
+            original_ciphertext: List[int] of length cipher_len, ground truth values [0-255]
+
+        Returns:
+            dict with the following keys:
+                - 'per_byte_p_correct': List[float] - P(correct) for each byte
+                - 'per_byte_p_fail': List[float] - P(fail) for each byte
+                - 'entropies': List[float] - Shannon entropy for each byte (bits)
+                - 'p_success_overall': float - probability all bytes decode correctly
+                - 'p_fail_overall': float - probability at least one byte fails
+                - 'avg_entropy': float - average entropy across all bytes
+                - 'num_weak_bytes': int - count of bytes with p_fail > 0.1
+                - 'num_strong_bytes': int - count of bytes with p_fail < 0.01
+        """
+        results = {
+            'per_byte_p_correct': [],
+            'per_byte_p_fail': [],
+            'entropies': []
+        }
+
+        # Iterate through each byte
+        for i in range(len(original_ciphertext)):
+            # Get posterior distribution for this byte
+            posterior_i = posterior.component_distributions[i]
+
+            # Get correct value
+            correct_value = original_ciphertext[i]
+
+            # Calculate p_correct and p_fail
+            p_correct = float(posterior_i[correct_value])
+            p_fail = 1.0 - p_correct
+
+            results['per_byte_p_correct'].append(p_correct)
+            results['per_byte_p_fail'].append(p_fail)
+
+            # Calculate entropy: H(X) = -Σ p(x) * log₂(p(x))
+            nonzero_probs = posterior_i[posterior_i > 0]
+            if len(nonzero_probs) > 0:
+                entropy = float(-(nonzero_probs * np.log2(nonzero_probs)).sum())
+            else:
+                entropy = 0.0
+            results['entropies'].append(entropy)
+
+        # Calculate overall metrics
+        results['p_success_overall'] = float(np.prod(results['per_byte_p_correct']))
+        results['p_fail_overall'] = 1.0 - results['p_success_overall']
+        results['avg_entropy'] = float(np.mean(results['entropies']))
+        results['num_weak_bytes'] = sum(1 for p in results['per_byte_p_fail'] if p > 0.1)
+        results['num_strong_bytes'] = sum(1 for p in results['per_byte_p_fail'] if p < 0.01)
+
+        return results
+
+    def encode(self, plaintext: str = "Attack at dawn!", debug: bool = False) -> Tuple[str, np.ndarray, Dict]:
         """
         Encodes the plaintext into stegotext using encrypted steganography.
+
+        Computes failure probabilities during encoding to predict decoding reliability.
 
         Args:
             plaintext (str): The message to encode. Default is "Attack at dawn!".
             debug (bool): If True, logs debug information to ./logs directory. Default is False.
 
         Returns:
-            Tuple[str, np.ndarray]: The formatted stegotext and the original stegotext.
+            Tuple[str, np.ndarray, Dict]: The formatted stegotext, original stegotext, and
+            failure probability analysis containing:
+                - 'per_byte_p_correct': List[float] - probability each byte decodes correctly
+                - 'per_byte_p_fail': List[float] - probability each byte fails
+                - 'entropies': List[float] - Shannon entropy per byte (bits)
+                - 'p_success_overall': float - probability all bytes decode correctly
+                - 'p_fail_overall': float - probability at least one byte fails
+                - 'avg_entropy': float - average entropy across bytes
+                - 'num_weak_bytes': int - count of bytes with p_fail > 0.1
+                - 'num_strong_bytes': int - count of bytes with p_fail < 0.01
         """
         # Setup debug logging if requested
         logger = None
@@ -108,6 +179,11 @@ class Encoder:
         # Generate stegotext with the ciphertext hidden inside.
         stegotext, _ = self._imec.sample_y_given_x(ciphertext)
 
+        # Compute posterior distributions to calculate failure probabilities
+        # This predicts decoding reliability at encoding time
+        posterior = self._imec._x_given_y(stegotext)
+        failure_probs = self._calculate_failure_probabilities(posterior, ciphertext)
+
         # Format the stegotext by replacing multiple spaces with newlines.
         formatted_stegotext = re.sub(" {2,}", "\n", self._covertext_dist.decode(stegotext).replace("\n", " ")).strip()
 
@@ -116,10 +192,17 @@ class Encoder:
                 'stegotext_length': int(len(stegotext)),
                 'formatted_stegotext': formatted_stegotext,
                 'stegotext_tokens': [int(t) for t in stegotext],
+                'failure_probabilities': {
+                    'p_fail_overall': failure_probs['p_fail_overall'],
+                    'p_success_overall': failure_probs['p_success_overall'],
+                    'avg_entropy': failure_probs['avg_entropy'],
+                    'num_weak_bytes': failure_probs['num_weak_bytes'],
+                    'num_strong_bytes': failure_probs['num_strong_bytes'],
+                }
             })
             logger.finish()
 
-        return formatted_stegotext, stegotext
+        return formatted_stegotext, stegotext, failure_probs
 
     def decode(self, stegotext: np.ndarray, debug: bool = False, true_plaintext: Optional[str] = None) -> Tuple[str, bytes]:
         """
