@@ -22,6 +22,15 @@
   gap: 1rem;
 }
 
+.input-label {
+  font-family: 'Comic Sans MS', 'Comic Neue', cursive, sans-serif;
+  font-size: 1.1rem;
+  font-weight: bold;
+  color: #333;
+  margin-top: 0.5rem;
+  margin-bottom: -0.5rem;
+}
+
 .prompt-input {
   width: 100%;
   max-width: 600px;
@@ -65,6 +74,24 @@
 .generate-btn:disabled {
   background-color: #ccc;
   cursor: not-allowed;
+}
+
+.loading-message {
+  font-family: 'Comic Sans MS', 'Comic Neue', cursive, sans-serif;
+  font-size: 1.2rem;
+  color: #666;
+  text-align: center;
+  padding: 1rem;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
 .messages-section {

@@ -75,6 +75,7 @@ function App() {
     <div className="app">
       <div className="container">
         <div className="input-section">
+          <label className="input-label">Prompt</label>
           <input
             type="text"
             className="prompt-input"
@@ -84,6 +85,7 @@ function App() {
             onKeyPress={(e) => e.key === 'Enter' && handleGenerate()}
             disabled={isGenerating || messages !== null}
           />
+          <label className="input-label">Hidden Message</label>
           <input
             type="text"
             className="prompt-input"
@@ -93,14 +95,19 @@ function App() {
             onKeyPress={(e) => e.key === 'Enter' && handleGenerate()}
             disabled={isGenerating || messages !== null}
           />
-          {!messages && (
+          {!messages && !isGenerating && (
             <button
               className="generate-btn"
               onClick={handleGenerate}
-              disabled={!prompt.trim() || !hiddenMessage.trim() || isGenerating}
+              disabled={!prompt.trim() || !hiddenMessage.trim()}
             >
-              {isGenerating ? 'Generating...' : 'Generate'}
+              Generate
             </button>
+          )}
+          {isGenerating && (
+            <div className="loading-message">
+              Generating, usually takes 30 seconds...
+            </div>
           )}
         </div>
 
