@@ -77,6 +77,20 @@ def generate_vanilla_text(prompt, temperature=1.3, max_length=300):
     if generated_text.startswith(prompt):
         generated_text = generated_text[len(prompt):].strip()
 
+    # Truncate at last complete sentence to avoid mid-sentence cutoffs
+    # Look for sentence-ending punctuation (., !, ?)
+    sentence_endings = ['.', '!', '?']
+    last_sentence_end = -1
+    for i in range(len(generated_text) - 1, -1, -1):
+        if generated_text[i] in sentence_endings:
+            # Make sure it's not part of an ellipsis or decimal
+            if i + 1 >= len(generated_text) or generated_text[i + 1] in [' ', '\n', '\r', '\t'] or i == len(generated_text) - 1:
+                last_sentence_end = i
+                break
+
+    if last_sentence_end > 0:
+        generated_text = generated_text[:last_sentence_end + 1]
+
     return generated_text
 
 def generate_stego_text(prompt, hidden_message, temperature=1.3, max_length=300):
