@@ -56,8 +56,12 @@ def generate_vanilla_text(prompt, temperature=1.3, max_length=300):
     """
     initialize_vanilla_model()
 
+    # Add newline to prompt to match steganographic generation behavior
+    # This ensures the model generates clean output instead of continuing the prompt
+    prompt_with_newline = prompt + "\n"
+
     # Tokenize the input
-    inputs = vanilla_tokenizer(prompt, return_tensors="pt").to(vanilla_model.device)
+    inputs = vanilla_tokenizer(prompt_with_newline, return_tensors="pt").to(vanilla_model.device)
 
     # Generate text
     with torch.no_grad():
@@ -73,8 +77,11 @@ def generate_vanilla_text(prompt, temperature=1.3, max_length=300):
     # Decode and return
     generated_text = vanilla_tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-    # Remove the original prompt from the output
-    if generated_text.startswith(prompt):
+    # Remove the original prompt (with newline) from the output
+    if generated_text.startswith(prompt_with_newline):
+        generated_text = generated_text[len(prompt_with_newline):].strip()
+    elif generated_text.startswith(prompt):
+        # Fallback in case newline wasn't included in output
         generated_text = generated_text[len(prompt):].strip()
 
     # Truncate at last complete sentence to avoid mid-sentence cutoffs
