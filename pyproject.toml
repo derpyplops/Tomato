@@ -18,6 +18,8 @@ dependencies = [
     "torchaudio",
     "mec @ git+https://github.com/user1342/mec",
     "pytest",
+    "flask",
+    "flask-cors",
 ]
 
 [[tool.uv.index]]

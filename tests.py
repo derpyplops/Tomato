@@ -56,7 +56,7 @@ def _process_testcase(testcase):
     plaintext = testcase.plaintext
 
     # Encode the message
-    formatted_stegotext, stegotext = encoder.encode(plaintext)
+    formatted_stegotext, stegotext, failure_probs = encoder.encode(plaintext)
 
     # Decode the message
     estimated_plaintext, estimated_bytetext = encoder.decode(stegotext)
