@@ -19,7 +19,7 @@ function App() {
 
     try {
       // Call the backend API (use ngrok URL for public access)
-      const backendUrl = 'https://0123aa97af8f.ngrok-free.app/api/generate';
+      const backendUrl = 'https://bd84278d2368.ngrok-free.app/api/generate';
       const response = await fetch(backendUrl, {
         method: 'POST',
         headers: {
@@ -37,6 +37,8 @@ function App() {
       }
 
       const data = await response.json()
+
+      console.table(data)
 
       // Randomly decide which position (A or B) gets the stego message
       const stegoPosition = Math.random() > 0.5 ? 'A' : 'B'
