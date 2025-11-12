@@ -33,6 +33,7 @@ class ModelWrapper:
 
         self.tokenizer = llm.tokenizer
         self.model = llm.model
+        self.device = llm._device
         self.vocab_size = self.model.config.vocab_size
         self.vocab = np.array([self.tokenizer.decode([i]) for i in range(self.vocab_size)])
 
@@ -49,7 +50,8 @@ class ModelWrapper:
         """
         with torch.no_grad():
             encoded_input = self.tokenizer(text, return_tensors="pt")
-            outputs = self.model(encoded_input["input_ids"])
+            input_ids = encoded_input["input_ids"].to(self.device)
+            outputs = self.model(input_ids)
             return nn.Softmax(dim=-1)(outputs[0][:, -1, :] / temperature)
 
     def top_k_conditional(self, text: str, temperature: float, k: int) -> np.ndarray:
@@ -68,7 +70,7 @@ class ModelWrapper:
         kth_value = torch.topk(conditional, k).values.flatten()[-1]
         conditional[conditional < kth_value] = 0
         conditional /= conditional.sum()
-        return conditional.numpy().reshape(-1)
+        return conditional.cpu().numpy().reshape(-1)
 
     def reduced_ids(self, prompt: str, text: str, k: int) -> Optional[List[int]]:
         """
@@ -87,7 +89,7 @@ class ModelWrapper:
         reduced_tokens: List[int] = []
 
         for i, token in enumerate(text_tokens):
-            inputs = torch.tensor([prompt_tokens + text_tokens[:i]])
+            inputs = torch.tensor([prompt_tokens + text_tokens[:i]]).to(self.device)
             outputs = self.model(inputs)[0][0, -1, :]
             top_k_idx = outputs >= torch.topk(outputs, k).values.flatten()[-1]
             if top_k_idx[token]:

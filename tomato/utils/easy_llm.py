@@ -51,6 +51,7 @@ class EasyLLM:
             do_sample=True,
             torch_dtype=torch.float32,
         )
+        model = model.to(self._device)
         tokenizer = AutoTokenizer.from_pretrained(model_name, padding_side="left")
         return model, tokenizer
 
