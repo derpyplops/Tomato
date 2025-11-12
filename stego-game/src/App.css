@@ -1,0 +1,231 @@
+.app {
+  width: 100%;
+  min-height: 100vh;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 2rem;
+}
+
+.container {
+  max-width: 1200px;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 2rem;
+}
+
+.input-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+.prompt-input {
+  width: 100%;
+  max-width: 600px;
+  padding: 1.5rem;
+  font-size: 1.2rem;
+  border: 3px solid #333;
+  border-radius: 20px;
+  background-color: white;
+  color: #333;
+  font-family: 'Comic Sans MS', 'Comic Neue', cursive, sans-serif;
+  text-align: center;
+  outline: none;
+  transition: border-color 0.3s;
+}
+
+.prompt-input:focus {
+  border-color: #666;
+}
+
+.prompt-input::placeholder {
+  color: #999;
+  font-family: 'Comic Sans MS', 'Comic Neue', cursive, sans-serif;
+}
+
+.generate-btn {
+  padding: 0.8rem 2rem;
+  font-size: 1.1rem;
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  font-family: 'Comic Sans MS', 'Comic Neue', cursive, sans-serif;
+  transition: background-color 0.3s;
+}
+
+.generate-btn:hover:not(:disabled) {
+  background-color: #45a049;
+}
+
+.generate-btn:disabled {
+  background-color: #ccc;
+  cursor: not-allowed;
+}
+
+.messages-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+  margin-top: 1rem;
+}
+
+.message-box {
+  border: 3px solid #333;
+  border-radius: 20px;
+  padding: 2rem;
+  background-color: white;
+  min-height: 300px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.message-content {
+  font-family: 'Comic Sans MS', 'Comic Neue', cursive, sans-serif;
+  font-size: 1rem;
+  line-height: 1.6;
+  color: #333;
+  text-align: left;
+}
+
+.question {
+  text-align: center;
+  font-size: 1.3rem;
+  font-family: 'Comic Sans MS', 'Comic Neue', cursive, sans-serif;
+  color: #333;
+  margin: 1rem 0;
+}
+
+.answer-buttons {
+  display: flex;
+  justify-content: center;
+  gap: 3rem;
+  margin-top: 1rem;
+}
+
+.answer-btn {
+  width: 120px;
+  height: 60px;
+  font-size: 1.5rem;
+  font-weight: bold;
+  border-radius: 10px;
+  cursor: pointer;
+  font-family: 'Comic Sans MS', 'Comic Neue', cursive, sans-serif;
+  transition: all 0.3s;
+  border: 3px solid;
+}
+
+.answer-a {
+  background-color: white;
+  color: #dc3545;
+  border-color: #dc3545;
+}
+
+.answer-a:hover {
+  background-color: #dc3545;
+  color: white;
+}
+
+.answer-b {
+  background-color: white;
+  color: #28a745;
+  border-color: #28a745;
+}
+
+.answer-b:hover {
+  background-color: #28a745;
+  color: white;
+}
+
+.result-section {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  margin-top: 2rem;
+}
+
+.result {
+  font-size: 2.5rem;
+  font-weight: bold;
+  font-family: 'Comic Sans MS', 'Comic Neue', cursive, sans-serif;
+  padding: 1rem 3rem;
+  border-radius: 15px;
+  animation: fadeIn 0.5s;
+}
+
+.result.correct {
+  color: #28a745;
+  background-color: #d4edda;
+  border: 3px solid #28a745;
+}
+
+.result.wrong {
+  color: #dc3545;
+  background-color: #f8d7da;
+  border: 3px solid #dc3545;
+}
+
+.hidden-message {
+  font-family: 'Comic Sans MS', 'Comic Neue', cursive, sans-serif;
+  font-size: 1.2rem;
+  color: #333;
+  text-align: center;
+  padding: 1.5rem;
+  background-color: #f0f0f0;
+  border-radius: 10px;
+  border: 2px solid #666;
+  max-width: 600px;
+  line-height: 1.8;
+}
+
+.reset-btn {
+  padding: 0.8rem 2rem;
+  font-size: 1.1rem;
+  background-color: #007bff;
+  color: white;
+  border: none;
+  border-radius: 10px;
+  cursor: pointer;
+  font-family: 'Comic Sans MS', 'Comic Neue', cursive, sans-serif;
+  transition: background-color 0.3s;
+}
+
+.reset-btn:hover {
+  background-color: #0056b3;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: scale(0.9);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .messages-section {
+    grid-template-columns: 1fr;
+  }
+
+  .answer-buttons {
+    gap: 2rem;
+  }
+
+  .prompt-input {
+    font-size: 1rem;
+  }
+
+  .message-content {
+    font-size: 0.9rem;
+  }
+}
