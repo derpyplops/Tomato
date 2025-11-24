@@ -74,9 +74,17 @@ RUN pnpm install
 # Return to app directory
 WORKDIR /app
 
+# Make startup script executable
+RUN chmod +x /app/start-services.sh
+
+# Create log directory
+RUN mkdir -p /var/log
+
 # Expose ports
 EXPOSE 5000 5173
 
-# Set entrypoint
-ENTRYPOINT ["python3"]
-CMD ["--help"]
+# Set environment variable for ngrok auth token (to be provided at runtime)
+ENV NGROK_AUTHTOKEN=""
+
+# Set entrypoint to startup script
+ENTRYPOINT ["/app/start-services.sh"]
