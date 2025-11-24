@@ -19,7 +19,7 @@ function App() {
 
     try {
       // Call the backend API (use ngrok URL for public access)
-      const backendUrl = 'https://bd84278d2368.ngrok-free.app/api/generate';
+      const backendUrl = 'https://84ab38e0843a.ngrok-free.app/api/generate';
       const response = await fetch(backendUrl, {
         method: 'POST',
         headers: {
