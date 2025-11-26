@@ -11,8 +11,9 @@ from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+import json
 
 # Step 1: Import logger and patch FIRST (before Encoder import)
 from tomato.utils.early_patch_logger import EarlyPatchLogger
@@ -74,6 +75,15 @@ class DecodeRequest(BaseModel):
 
 class DecodeResponse(BaseModel):
     plaintext: str = Field(..., description="Decoded secret message")
+
+
+class StreamEncodeRequest(BaseModel):
+    plaintext: str = Field(..., description="Secret message to encode")
+    prompt: str = Field(..., description="Cover story prompt for stegotext generation")
+    cipher_len: int = Field(..., description="Length of the cipher in bytes", gt=0, le=100)
+    max_len: int = Field(..., description="Maximum length of generated stegotext", gt=0)
+    chunk_size: int = Field(10, description="Number of tokens per chunk", gt=0)
+    calculate_failure_probs: bool = Field(False, description="Calculate failure probabilities")
 
 
 class ErrorResponse(BaseModel):
@@ -307,6 +317,92 @@ async def decode(request: DecodeRequest):
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Decoding failed: {str(e)}"
             )
+
+
+@app.post(
+    "/encode/stream",
+    responses={
+        503: {
+            "model": ErrorResponse,
+            "description": "Server is busy processing another request"
+        }
+    },
+    summary="Encode plaintext into stegotext with streaming output"
+)
+async def encode_stream(request: StreamEncodeRequest):
+    """
+    Encode a secret message into natural-looking text with streaming output.
+
+    Returns Server-Sent Events (SSE) stream with chunks of the encoded text as they're generated.
+    Each event is a JSON object with 'type' field indicating the event type:
+    - 'metadata': Initial information about the encoding
+    - 'token': A chunk of decoded tokens
+    - 'complete': Final message with full stegotext and metadata
+
+    Only one encoding operation is allowed at a time to prevent RAM exhaustion.
+    Returns 503 if another request is being processed.
+    """
+
+    # Try to acquire lock (non-blocking)
+    if encoding_lock.locked():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Server is currently processing another request. Please try again."
+        )
+
+    async def event_generator():
+        async with encoding_lock:
+            try:
+                # Use the first cipher_len bytes of the server key
+                key_slice = server_key[:request.cipher_len]
+
+                # Create new encoder for this request
+                enc = create_encoder(
+                    prompt=request.prompt,
+                    cipher_len=request.cipher_len,
+                    max_len=request.max_len,
+                    shared_private_key=key_slice
+                )
+
+                print(f"🔐 Streaming encode: {len(request.plaintext)} chars (chunk_size={request.chunk_size})")
+
+                # Run encoding in thread pool and stream results
+                loop = asyncio.get_event_loop()
+
+                # Create the generator in the thread pool
+                def run_encode_stream():
+                    return enc.encode_stream(
+                        plaintext=request.plaintext,
+                        chunk_size=request.chunk_size,
+                        calculate_failure_probs=request.calculate_failure_probs
+                    )
+
+                # Get the generator
+                stream_gen = await loop.run_in_executor(None, run_encode_stream)
+
+                # Yield each chunk as SSE
+                for chunk in stream_gen:
+                    # Convert to SSE format: "data: {json}\n\n"
+                    yield f"data: {json.dumps(chunk)}\n\n"
+
+                print(f"✓ Streaming encode complete")
+
+            except Exception as e:
+                print(f"❌ Streaming encode failed: {str(e)}")
+                error_event = {
+                    'type': 'error',
+                    'detail': str(e)
+                }
+                yield f"data: {json.dumps(error_event)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
 
 
 if __name__ == "__main__":

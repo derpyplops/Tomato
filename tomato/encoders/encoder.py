@@ -5,7 +5,7 @@ from tomato.utils.model_marginal import ModelMarginal
 from tomato.utils.debug_logger import FIMECDebugLogger
 from mec import FIMEC
 import numpy as np
-from typing import Tuple, Optional, Dict, List
+from typing import Tuple, Optional, Dict, List, Generator, Union
 
 class Encoder:
     """
@@ -212,6 +212,95 @@ class Encoder:
             logger.finish()
 
         return formatted_stegotext, stegotext, failure_probs
+
+    def encode_stream(
+        self,
+        plaintext: str = "Attack at dawn!",
+        chunk_size: int = 10,
+        calculate_failure_probs: bool = False
+    ) -> Generator[Dict[str, Union[str, int, bool]], None, None]:
+        """
+        Encodes plaintext into stegotext and yields chunks as they're processed.
+
+        This method generates the entire stegotext first (as the underlying FIMEC algorithm
+        is not inherently streaming), but yields the decoded text in chunks for streaming output.
+
+        Args:
+            plaintext (str): The message to encode. Default is "Attack at dawn!".
+            chunk_size (int): Number of tokens to decode and yield per chunk. Default is 10.
+            calculate_failure_probs (bool): If True, computes failure probabilities. Default is False.
+
+        Yields:
+            Dict containing:
+                - 'type': 'token' | 'metadata' | 'complete'
+                - 'text': Decoded text chunk (for 'token' type)
+                - 'tokens': Token IDs for this chunk (for 'token' type)
+                - 'token_index': Current token index (for 'token' type)
+                - 'total_tokens': Total number of tokens (for 'metadata' and 'complete' types)
+                - 'failure_probs': Failure probability dict (for 'complete' type if enabled)
+        """
+        # Convert plaintext to bytes
+        bytetext = plaintext.encode("utf-8")
+
+        # Pad if necessary
+        if len(bytetext) < self._cipher_len:
+            bytetext += b'A' * (self._cipher_len - len(bytetext))
+
+        if len(bytetext) != self._cipher_len:
+            raise ValueError("Plaintext too long for cipher length")
+
+        # Encrypt
+        ciphertext = [a ^ b for a, b in zip(bytetext, self._shared_private_key)]
+
+        # Generate stegotext (all at once - FIMEC doesn't support true streaming)
+        stegotext, _ = self._imec.sample_y_given_x(ciphertext)
+
+        total_tokens = len(stegotext)
+
+        # Yield metadata first
+        yield {
+            'type': 'metadata',
+            'total_tokens': int(total_tokens),
+            'plaintext_length': len(plaintext),
+            'cipher_len': self._cipher_len
+        }
+
+        # Stream tokens in chunks
+        for i in range(0, total_tokens, chunk_size):
+            chunk_end = min(i + chunk_size, total_tokens)
+            token_chunk = stegotext[i:chunk_end]
+
+            # Decode this chunk of tokens to text
+            chunk_text = self._covertext_dist.decode(token_chunk)
+
+            yield {
+                'type': 'token',
+                'text': chunk_text,
+                'tokens': [int(t) for t in token_chunk],
+                'token_index': i,
+                'chunk_size': len(token_chunk)
+            }
+
+        # Optionally calculate failure probabilities
+        failure_probs = {}
+        if calculate_failure_probs:
+            posterior = self._imec._x_given_y(stegotext)
+            failure_probs = self._calculate_failure_probabilities(posterior, ciphertext)
+
+        # Format the complete stegotext
+        formatted_stegotext = re.sub(
+            " {2,}", "\n",
+            self._covertext_dist.decode(stegotext).replace("\n", " ")
+        ).strip()
+
+        # Yield completion message
+        yield {
+            'type': 'complete',
+            'total_tokens': int(total_tokens),
+            'formatted_stegotext': formatted_stegotext,
+            'stegotext': [int(t) for t in stegotext],
+            'failure_probs': failure_probs if calculate_failure_probs else {}
+        }
 
     def decode(self, stegotext: np.ndarray, debug: bool = False, true_plaintext: Optional[str] = None) -> Tuple[str, bytes]:
         """
