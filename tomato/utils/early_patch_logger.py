@@ -89,11 +89,10 @@ class EarlyPatchLogger:
 
         self.couplings.append(coupling_info)
 
-        # Print progress every 10 couplings
-        if self.coupling_count % 10 == 0:
-            print(f"  Coupling {self.coupling_count:3d}: "
-                  f"Token H={token_entropy:.2f}, "
-                  f"Byte H={byte_entropy:.2f}")
+        # Print progress for every coupling
+        print(f"  Coupling {self.coupling_count:3d}: "
+              f"Token H={token_entropy:.2f}, "
+              f"Byte H={byte_entropy:.2f}")
 
         self.coupling_count += 1
 
