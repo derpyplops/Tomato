@@ -5,6 +5,8 @@ Handles one encoding request at a time to avoid RAM exhaustion.
 
 import asyncio
 import numpy as np
+import secrets
+from pathlib import Path
 from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
 
@@ -19,23 +21,58 @@ from tomato.utils.early_patch_logger import EarlyPatchLogger
 encoding_lock = asyncio.Lock()
 logger = None
 Encoder = None  # Will be imported after patch
+server_key = None  # Shared private key for all operations
 
 # Default configuration
 DEFAULT_MODEL = "google/gemma-3-1b-it"
 DEFAULT_TEMPERATURE = 1.3
+KEY_FILE = ".server_key"
+KEY_LENGTH = 100  # 100 bytes for the shared key
+
+
+def load_or_create_key() -> bytes:
+    """Load existing key from file or create a new one"""
+    key_path = Path(KEY_FILE)
+
+    if key_path.exists():
+        print(f"📂 Loading existing key from {KEY_FILE}")
+        with open(key_path, 'rb') as f:
+            key = f.read()
+        if len(key) != KEY_LENGTH:
+            raise ValueError(f"Invalid key length in {KEY_FILE}: expected {KEY_LENGTH}, got {len(key)}")
+        print(f"✓ Loaded {len(key)}-byte key")
+        return key
+    else:
+        print(f"🔑 Generating new {KEY_LENGTH}-byte key")
+        key = secrets.token_bytes(KEY_LENGTH)
+        with open(key_path, 'wb') as f:
+            f.write(key)
+        print(f"✓ Saved key to {KEY_FILE}")
+        return key
 
 
 # Pydantic Models
 class EncodeRequest(BaseModel):
     plaintext: str = Field(..., description="Secret message to encode")
     prompt: str = Field(..., description="Cover story prompt for stegotext generation")
-    cipher_len: int = Field(..., description="Length of the cipher in bytes", gt=0)
+    cipher_len: int = Field(..., description="Length of the cipher in bytes", gt=0, le=100)
     max_len: int = Field(..., description="Maximum length of generated stegotext", gt=0)
 
 
 class EncodeResponse(BaseModel):
     stegotext: list = Field(..., description="Token IDs of the stegotext")
     formatted_stegotext: str = Field(..., description="Formatted stegotext for display")
+
+
+class DecodeRequest(BaseModel):
+    stegotext: list = Field(..., description="Token IDs of the stegotext to decode")
+    prompt: str = Field(..., description="Same cover story prompt used during encoding")
+    cipher_len: int = Field(..., description="Same cipher length used during encoding", gt=0, le=100)
+    max_len: int = Field(..., description="Same max_len used during encoding", gt=0)
+
+
+class DecodeResponse(BaseModel):
+    plaintext: str = Field(..., description="Decoded secret message")
 
 
 class ErrorResponse(BaseModel):
@@ -45,7 +82,7 @@ class ErrorResponse(BaseModel):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown logic"""
-    global logger, Encoder
+    global logger, Encoder, server_key
 
     # Startup: Apply early patch
     print("🚀 Starting Tomato Encoder API Server...")
@@ -57,6 +94,10 @@ async def lifespan(app: FastAPI):
     from tomato import Encoder as EncoderClass
     Encoder = EncoderClass
     print("✓ Encoder class imported")
+
+    # Load or create server key
+    server_key = load_or_create_key()
+    print(f"✓ Server key ready (first 8 bytes: {server_key[:8].hex()}...)")
 
     yield
 
@@ -91,7 +132,7 @@ def convert_numpy_types(obj):
         return obj
 
 
-def create_encoder(prompt: str, cipher_len: int, max_len: int):
+def create_encoder(prompt: str, cipher_len: int, max_len: int, shared_private_key: Optional[bytes] = None):
     """Create a new encoder instance with the given parameters"""
     print(f"🔄 Creating encoder: model={DEFAULT_MODEL}, cipher_len={cipher_len}, max_len={max_len}")
 
@@ -100,7 +141,8 @@ def create_encoder(prompt: str, cipher_len: int, max_len: int):
         prompt=prompt,
         cipher_len=cipher_len,
         max_len=max_len,
-        temperature=DEFAULT_TEMPERATURE
+        temperature=DEFAULT_TEMPERATURE,
+        shared_private_key=shared_private_key
     )
 
     print("✓ Encoder created successfully")
@@ -145,11 +187,14 @@ async def encode(request: EncodeRequest):
 
     async with encoding_lock:
         try:
+            # Use the first cipher_len bytes of the server key
+
             # Create new encoder for this request
             enc = create_encoder(
                 prompt=request.prompt,
                 cipher_len=request.cipher_len,
-                max_len=request.max_len
+                max_len=request.max_len,
+                shared_private_key=server_key
             )
 
             print(f"🔐 Encoding: {len(request.plaintext)} chars")
@@ -187,6 +232,79 @@ async def encode(request: EncodeRequest):
             )
 
 
+@app.post(
+    "/decode",
+    response_model=DecodeResponse,
+    responses={
+        503: {
+            "model": ErrorResponse,
+            "description": "Server is busy processing another request"
+        }
+    },
+    summary="Decode stegotext back to plaintext"
+)
+async def decode(request: DecodeRequest):
+    """
+    Decode stegotext back into the original secret message.
+
+    Requires the same parameters used during encoding (prompt, cipher_len, max_len)
+    and the shared_private_key that was returned from the encode endpoint.
+
+    Only one decoding operation is allowed at a time to prevent RAM exhaustion.
+    Returns 503 if another request is being processed.
+    """
+
+    # Try to acquire lock (non-blocking)
+    if encoding_lock.locked():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Server is currently processing another request. Please try again."
+        )
+
+    async with encoding_lock:
+        try:
+            # Create encoder with the SAME parameters and key used during encoding
+            enc = create_encoder(
+                prompt=request.prompt,
+                cipher_len=request.cipher_len,
+                max_len=request.max_len,
+                shared_private_key=server_key
+            )
+
+            print(f"🔓 Decoding: {len(request.stegotext)} tokens")
+
+            # Pass stegotext as-is (list of ints)
+            # The decoder will handle the conversion internally
+            stegotext = request.stegotext
+
+            # Run decoding in thread pool (CPU-intensive operation)
+            loop = asyncio.get_event_loop()
+            estimated_plaintext, estimated_bytetext = await loop.run_in_executor(
+                None,
+                enc.decode,
+                stegotext,
+                False  # debug=False
+            )
+
+            # Strip padding characters
+            decoded_plaintext = estimated_plaintext.rstrip('A')
+
+            print(f"✓ Decoding complete: {len(decoded_plaintext)} chars")
+
+            response = {
+                "plaintext": decoded_plaintext
+            }
+
+            return response
+
+        except Exception as e:
+            print(f"❌ Decoding failed: {str(e)}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Decoding failed: {str(e)}"
+            )
+
+
 if __name__ == "__main__":
     import uvicorn
 
@@ -197,4 +315,4 @@ if __name__ == "__main__":
     print(f"Temperature: {DEFAULT_TEMPERATURE}")
     print("=" * 70)
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8001)
