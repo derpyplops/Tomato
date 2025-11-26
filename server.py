@@ -57,6 +57,7 @@ class EncodeRequest(BaseModel):
     prompt: str = Field(..., description="Cover story prompt for stegotext generation")
     cipher_len: int = Field(..., description="Length of the cipher in bytes", gt=0, le=100)
     max_len: int = Field(..., description="Maximum length of generated stegotext", gt=0)
+    calculate_failure_probs: bool = Field(False, description="Calculate failure probabilities (requires extra decoding pass, ~2x slower)")
 
 
 class EncodeResponse(BaseModel):
@@ -188,24 +189,27 @@ async def encode(request: EncodeRequest):
     async with encoding_lock:
         try:
             # Use the first cipher_len bytes of the server key
+            key_slice = server_key[:request.cipher_len]
 
             # Create new encoder for this request
             enc = create_encoder(
                 prompt=request.prompt,
                 cipher_len=request.cipher_len,
                 max_len=request.max_len,
-                shared_private_key=server_key
+                shared_private_key=key_slice
             )
 
-            print(f"🔐 Encoding: {len(request.plaintext)} chars")
+            print(f"🔐 Encoding: {len(request.plaintext)} chars (failure_probs={request.calculate_failure_probs})")
 
             # Run encoding in thread pool (CPU-intensive operation)
             loop = asyncio.get_event_loop()
             formatted_stegotext, stegotext, probs = await loop.run_in_executor(
                 None,
-                enc.encode,
-                request.plaintext,
-                False  # debug=False
+                lambda: enc.encode(
+                    request.plaintext,
+                    debug=False,
+                    calculate_failure_probs=request.calculate_failure_probs
+                )
             )
 
             print(f"✓ Encoding complete: {len(stegotext)} tokens generated")

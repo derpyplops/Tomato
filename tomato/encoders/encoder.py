@@ -123,19 +123,21 @@ class Encoder:
 
         return results
 
-    def encode(self, plaintext: str = "Attack at dawn!", debug: bool = False) -> Tuple[str, np.ndarray, Dict]:
+    def encode(self, plaintext: str = "Attack at dawn!", debug: bool = False, calculate_failure_probs: bool = True) -> Tuple[str, np.ndarray, Dict]:
         """
         Encodes the plaintext into stegotext using encrypted steganography.
 
-        Computes failure probabilities during encoding to predict decoding reliability.
+        Optionally computes failure probabilities during encoding to predict decoding reliability.
 
         Args:
             plaintext (str): The message to encode. Default is "Attack at dawn!".
             debug (bool): If True, logs debug information to ./logs directory. Default is False.
+            calculate_failure_probs (bool): If True, computes posterior distributions and failure
+                probabilities (requires additional decoding pass). Default is True.
 
         Returns:
             Tuple[str, np.ndarray, Dict]: The formatted stegotext, original stegotext, and
-            failure probability analysis containing:
+            failure probability analysis (empty dict if calculate_failure_probs=False) containing:
                 - 'per_byte_p_correct': List[float] - probability each byte decodes correctly
                 - 'per_byte_p_fail': List[float] - probability each byte fails
                 - 'entropies': List[float] - Shannon entropy per byte (bits)
@@ -179,27 +181,34 @@ class Encoder:
         # Generate stegotext with the ciphertext hidden inside.
         stegotext, _ = self._imec.sample_y_given_x(ciphertext)
 
-        # Compute posterior distributions to calculate failure probabilities
-        # This predicts decoding reliability at encoding time
-        posterior = self._imec._x_given_y(stegotext)
-        failure_probs = self._calculate_failure_probabilities(posterior, ciphertext)
+        # Optionally compute posterior distributions to calculate failure probabilities
+        # This predicts decoding reliability at encoding time (requires extra decoding pass)
+        if calculate_failure_probs:
+            posterior = self._imec._x_given_y(stegotext)
+            failure_probs = self._calculate_failure_probabilities(posterior, ciphertext)
+        else:
+            failure_probs = {}
 
         # Format the stegotext by replacing multiple spaces with newlines.
         formatted_stegotext = re.sub(" {2,}", "\n", self._covertext_dist.decode(stegotext).replace("\n", " ")).strip()
 
         if debug and logger:
-            logger.log_result({
+            result_data = {
                 'stegotext_length': int(len(stegotext)),
                 'formatted_stegotext': formatted_stegotext,
                 'stegotext_tokens': [int(t) for t in stegotext],
-                'failure_probabilities': {
+            }
+
+            if calculate_failure_probs and failure_probs:
+                result_data['failure_probabilities'] = {
                     'p_fail_overall': failure_probs['p_fail_overall'],
                     'p_success_overall': failure_probs['p_success_overall'],
                     'avg_entropy': failure_probs['avg_entropy'],
                     'num_weak_bytes': failure_probs['num_weak_bytes'],
                     'num_strong_bytes': failure_probs['num_strong_bytes'],
                 }
-            })
+
+            logger.log_result(result_data)
             logger.finish()
 
         return formatted_stegotext, stegotext, failure_probs
