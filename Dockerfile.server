@@ -1,0 +1,41 @@
+FROM nvidia/cuda:11.8.0-devel-ubuntu22.04
+
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    git \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv (fast Python package installer)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && ln -s /root/.cargo/bin/uv /usr/local/bin/uv
+
+# Set working directory
+WORKDIR /app
+
+# Copy project files
+COPY . /app
+
+# Create virtual environment and install dependencies using uv
+RUN uv venv && \
+    . .venv/bin/activate && \
+    uv pip install --no-cache -e . && \
+    uv pip install --no-cache fastapi uvicorn
+
+# Create logs directory
+RUN mkdir -p /app/logs
+
+# Expose port 8000 for the API server
+EXPOSE 8000
+
+# Set environment to use the virtual environment
+ENV PATH="/app/.venv/bin:$PATH"
+
+# Run the FastAPI server
+CMD ["python", "server.py"]
