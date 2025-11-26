@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tomato Encoder - LLM Steganography</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        .header p {
+            opacity: 0.9;
+            font-size: 1.1em;
+        }
+
+        .content {
+            padding: 30px;
+        }
+
+        .section {
+            margin-bottom: 30px;
+        }
+
+        .section h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            font-size: 1.5em;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+        }
+
+        input[type="text"],
+        textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 1em;
+            font-family: inherit;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 14px 30px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+            width: 100%;
+        }
+
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .button:active {
+            transform: translateY(0);
+        }
+
+        .button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .output {
+            background: #f8f9fa;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+            min-height: 60px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .output.empty {
+            color: #999;
+            font-style: italic;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .streaming-output {
+            background: #f8f9fa;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 15px;
+            margin-top: 15px;
+            min-height: 100px;
+            font-family: 'Georgia', serif;
+            line-height: 1.6;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .streaming-output.decoding {
+            background: linear-gradient(to right,
+                rgba(102, 126, 234, 0.15) 0%,
+                rgba(118, 75, 162, 0.15) 100%);
+        }
+
+        .highlight-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            height: 100%;
+            background: linear-gradient(90deg,
+                rgba(102, 126, 234, 0.4) 0%,
+                rgba(118, 75, 162, 0.3) 50%,
+                rgba(102, 126, 234, 0.15) 100%);
+            pointer-events: none;
+            transition: width 0.3s ease-out;
+            z-index: 1;
+        }
+
+        .streaming-output-text {
+            position: relative;
+            z-index: 2;
+        }
+
+        .token-segment {
+            display: inline;
+            transition: all 0.3s ease;
+        }
+
+        .token-segment.processed {
+            background: linear-gradient(120deg,
+                rgba(102, 126, 234, 0.4),
+                rgba(118, 75, 162, 0.4));
+            padding: 2px 0;
+            border-radius: 2px;
+            font-weight: 500;
+            text-shadow: 0 0 1px rgba(0,0,0,0.1);
+        }
+
+        .token-segment.current {
+            background: linear-gradient(120deg, #667eea, #764ba2);
+            color: white;
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-weight: 600;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.8; transform: scale(1.05); }
+        }
+
+        .decode-status-badge {
+            display: inline-block;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 0.85em;
+            font-weight: 600;
+            margin-bottom: 10px;
+            animation: slideIn 0.3s ease-out;
+            transition: opacity 0.3s ease, background 0.3s ease;
+        }
+
+        @keyframes slideIn {
+            from { opacity: 0; transform: translateY(-10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .info-box {
+            background: #e3f2fd;
+            border-left: 4px solid #2196f3;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+
+        .info-box p {
+            margin: 5px 0;
+            color: #1565c0;
+        }
+
+        .two-columns {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        @media (max-width: 768px) {
+            .two-columns {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🍅 Tomato Encoder</h1>
+            <p>Hide secret messages in natural-looking text using LLM steganography</p>
+        </div>
+
+        <div class="content">
+            <div class="info-box">
+                <p><strong>How it works:</strong> Enter your secret message and a cover story prompt. The encoder will generate natural-looking text that encodes your message using steganography.</p>
+                <p><strong>Settings:</strong> cipher_len=15, max_len=200 tokens</p>
+            </div>
+
+            <div class="section">
+                <h2>📝 Encode Message</h2>
+
+                <div class="form-group">
+                    <label for="plaintext">Secret Message</label>
+                    <textarea id="plaintext" placeholder="Enter your secret message...">Hello World</textarea>
+                </div>
+
+                <div class="form-group">
+                    <label for="prompt">Cover Story Prompt</label>
+                    <input type="text" id="prompt" value="tell me a story" placeholder="e.g., tell me a story, write a recipe...">
+                </div>
+
+                <button class="button" onclick="encodeMessage()">
+                    <span id="encode-btn-text">Encode Message</span>
+                </button>
+
+                <div class="form-group" style="margin-top: 20px;">
+                    <label>Generated Stegotext (streaming)</label>
+                    <div id="streaming-output" class="streaming-output empty">Stegotext will appear here as it's generated...</div>
+                </div>
+            </div>
+
+            <div class="section">
+                <h2>🔓 Decode Message</h2>
+
+                <div class="two-columns">
+                    <button class="button" onclick="decodeMessage()">
+                        <span id="decode-btn-text">Decode Instantly</span>
+                    </button>
+                    <button class="button" onclick="decodeMessageStreaming()">
+                        <span id="decode-stream-btn-text">Watch Bayesian Inference</span>
+                    </button>
+                </div>
+
+                <div class="form-group" style="margin-top: 20px;">
+                    <label>Decoded Secret / Streaming Inference</label>
+                    <div id="decode-output" class="output empty">Decoded message will appear here...</div>
+                </div>
+
+                <div id="confidence-section" style="display: none; margin-top: 15px;">
+                    <label>Confidence Evolution</label>
+                    <div style="background: #f8f9fa; border: 2px solid #e0e0e0; border-radius: 8px; padding: 15px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <span id="confidence-text" style="font-weight: 600; font-size: 1.2em;">--</span>
+                            <span id="tokens-processed" style="color: #666;">0/0 tokens</span>
+                        </div>
+                        <div style="margin-top: 10px; height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden;">
+                            <div id="confidence-bar" style="height: 100%; background: linear-gradient(90deg, #667eea, #764ba2); width: 0%; transition: width 0.3s;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let currentStegotext = [];
+        let currentPrompt = "";
+        let tokenToTextMap = [];  // Maps token index to accumulated text length
+
+        function updateTextHighlight(element, fullText, tokensProcessed, totalTokens) {
+            // Calculate how much of the text corresponds to processed tokens
+            // Use tokenToTextMap if available, otherwise estimate based on proportion
+            let processedTextLength;
+
+            if (tokenToTextMap.length > 0 && tokensProcessed <= tokenToTextMap.length) {
+                // Use actual mapping
+                processedTextLength = tokenToTextMap[tokensProcessed - 1] || 0;
+            } else {
+                // Estimate based on token proportion
+                const proportion = tokensProcessed / totalTokens;
+                processedTextLength = Math.floor(fullText.length * proportion);
+            }
+
+            // Split text into processed and unprocessed parts
+            const processedText = fullText.substring(0, processedTextLength);
+            const remainingText = fullText.substring(processedTextLength);
+
+            // Create highlighted HTML
+            element.innerHTML = `<span class="token-segment processed">${escapeHtml(processedText)}</span><span class="token-segment">${escapeHtml(remainingText)}</span>`;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        async function encodeMessage() {
+            const plaintext = document.getElementById('plaintext').value;
+            const prompt = document.getElementById('prompt').value;
+            const streamingOutput = document.getElementById('streaming-output');
+            const encodeBtn = document.getElementById('encode-btn-text');
+
+            if (!plaintext || !prompt) {
+                alert('Please enter both a message and a prompt');
+                return;
+            }
+
+            // Reset
+            currentStegotext = [];
+            currentPrompt = prompt;
+            tokenToTextMap = [];
+            streamingOutput.textContent = '';
+            streamingOutput.classList.remove('empty');
+            streamingOutput.classList.remove('decoding');
+            encodeBtn.innerHTML = '<span class="loading"></span> Encoding...';
+            document.querySelector('#encode-btn-text').parentElement.disabled = true;
+
+            try {
+                const response = await fetch('/encode/stream', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        plaintext: plaintext,
+                        prompt: prompt,
+                        chunk_size: 1,
+                        calculate_failure_probs: false
+                    })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const {done, value} = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = JSON.parse(line.slice(6));
+
+                            if (data.type === 'token') {
+                                currentStegotext.push(data.token_id);
+                                streamingOutput.textContent = data.text;
+                                // Track text length at each token for highlighting later
+                                tokenToTextMap.push(data.text.length);
+                            } else if (data.type === 'complete') {
+                                streamingOutput.textContent = data.formatted_stegotext;
+                                currentStegotext = data.stegotext;
+                            }
+                        }
+                    }
+                }
+
+                encodeBtn.textContent = 'Encode Message';
+                document.querySelector('#encode-btn-text').parentElement.disabled = false;
+
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Encoding failed: ' + error.message);
+                encodeBtn.textContent = 'Encode Message';
+                document.querySelector('#encode-btn-text').parentElement.disabled = false;
+            }
+        }
+
+        async function decodeMessage() {
+            const decodeOutput = document.getElementById('decode-output');
+            const decodeBtn = document.getElementById('decode-btn-text');
+
+            if (currentStegotext.length === 0) {
+                alert('Please encode a message first');
+                return;
+            }
+
+            decodeOutput.textContent = 'Decoding...';
+            decodeOutput.classList.remove('empty');
+            decodeBtn.innerHTML = '<span class="loading"></span> Decoding...';
+            document.querySelector('#decode-btn-text').parentElement.disabled = true;
+
+            try {
+                const response = await fetch('/decode', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        stegotext: currentStegotext,
+                        prompt: currentPrompt
+                    })
+                });
+
+                const data = await response.json();
+                decodeOutput.textContent = data.plaintext;
+                decodeBtn.textContent = 'Decode Stegotext';
+                document.querySelector('#decode-btn-text').parentElement.disabled = false;
+
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Decoding failed: ' + error.message);
+                decodeBtn.textContent = 'Decode Instantly';
+                document.querySelector('#decode-btn-text').parentElement.disabled = false;
+            }
+        }
+
+        async function decodeMessageStreaming() {
+            const streamingOutput = document.getElementById('streaming-output');
+            const decodeOutput = document.getElementById('decode-output');
+            const decodeStreamBtn = document.getElementById('decode-stream-btn-text');
+            const confidenceSection = document.getElementById('confidence-section');
+            const confidenceText = document.getElementById('confidence-text');
+            const tokensProcessed = document.getElementById('tokens-processed');
+            const confidenceBar = document.getElementById('confidence-bar');
+
+            if (currentStegotext.length === 0) {
+                alert('Please encode a message first');
+                return;
+            }
+
+            // Add decoding visual state
+            streamingOutput.classList.add('decoding');
+
+            // Add status badge
+            const badge = document.createElement('div');
+            badge.className = 'decode-status-badge';
+            badge.textContent = '🔓 Decoding in progress...';
+            streamingOutput.parentElement.insertBefore(badge, streamingOutput);
+
+            // Show confidence section
+            confidenceSection.style.display = 'block';
+            decodeOutput.textContent = 'Starting Bayesian inference...';
+            decodeOutput.classList.remove('empty');
+            decodeStreamBtn.innerHTML = '<span class="loading"></span> Inferring...';
+            document.querySelector('#decode-stream-btn-text').parentElement.disabled = true;
+
+            // Get full text for highlighting
+            const fullText = streamingOutput.textContent;
+
+            try {
+                const response = await fetch('/decode/stream', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        stegotext: currentStegotext,
+                        prompt: currentPrompt,
+                        chunk_size: 10
+                    })
+                });
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+
+                while (true) {
+                    const {done, value} = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (line.startsWith('data: ')) {
+                            const data = JSON.parse(line.slice(6));
+
+                            if (data.type === 'token') {
+                                // Update the current guess
+                                decodeOutput.textContent = data.current_guess;
+
+                                // Update confidence display
+                                const confidencePercent = (data.confidence * 100).toFixed(1);
+                                confidenceText.textContent = `${confidencePercent}% confident`;
+                                confidenceBar.style.width = `${confidencePercent}%`;
+                                tokensProcessed.textContent = `${data.tokens_processed}/${data.total_tokens} tokens`;
+
+                                // Highlight processed portion of stegotext
+                                updateTextHighlight(streamingOutput, fullText, data.tokens_processed, data.total_tokens);
+
+                            } else if (data.type === 'complete') {
+                                // Show final result
+                                decodeOutput.textContent = data.plaintext;
+                                confidenceText.textContent = '100% confident - Complete!';
+                                confidenceBar.style.width = '100%';
+
+                                // Highlight all text as complete
+                                updateTextHighlight(streamingOutput, fullText, data.total_tokens, data.total_tokens);
+
+                                // Update badge
+                                badge.textContent = '✅ Decoding complete!';
+                                badge.style.background = 'linear-gradient(135deg, #28a745, #20c997)';
+                            }
+                        }
+                    }
+                }
+
+                decodeStreamBtn.textContent = 'Watch Bayesian Inference';
+                document.querySelector('#decode-stream-btn-text').parentElement.disabled = false;
+
+                // Cleanup: remove badge after delay
+                setTimeout(() => {
+                    badge.style.opacity = '0';
+                    setTimeout(() => badge.remove(), 300);
+                }, 3000);
+
+            } catch (error) {
+                console.error('Error:', error);
+                alert('Streaming decode failed: ' + error.message);
+                decodeStreamBtn.textContent = 'Watch Bayesian Inference';
+                document.querySelector('#decode-stream-btn-text').parentElement.disabled = false;
+
+                // Remove badge on error
+                badge.remove();
+                streamingOutput.classList.remove('decoding');
+            }
+        }
+    </script>
+</body>
+</html>

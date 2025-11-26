@@ -278,20 +278,20 @@ class Encoder:
                 chunk_buffer.append(y_j)
 
                 if len(chunk_buffer) >= chunk_size:
-                    # Decode and yield this chunk
-                    chunk_text = self._covertext_dist.decode(chunk_buffer)
+                    # Decode ALL tokens so far for proper accumulated text display
+                    accumulated_text = self._covertext_dist.decode(y_prefix)
 
                     if chunk_size == 1:
                         yield {
                             'type': 'token',
-                            'text': chunk_text,
+                            'text': accumulated_text,
                             'token_id': int(chunk_buffer[0]),
                             'token_index': len(y_prefix) - 1
                         }
                     else:
                         yield {
                             'type': 'token',
-                            'text': chunk_text,
+                            'text': accumulated_text,
                             'tokens': [int(t) for t in chunk_buffer],
                             'token_index': len(y_prefix) - len(chunk_buffer),
                             'chunk_size': len(chunk_buffer)
@@ -301,19 +301,20 @@ class Encoder:
 
             # Yield any remaining tokens
             if chunk_buffer:
-                chunk_text = self._covertext_dist.decode(chunk_buffer)
+                # Decode ALL tokens so far for proper accumulated text display
+                accumulated_text = self._covertext_dist.decode(y_prefix)
                 if chunk_size == 1:
                     for i, token_id in enumerate(chunk_buffer):
                         yield {
                             'type': 'token',
-                            'text': self._covertext_dist.decode([token_id]),
+                            'text': accumulated_text,
                             'token_id': int(token_id),
                             'token_index': len(y_prefix) - len(chunk_buffer) + i
                         }
                 else:
                     yield {
                         'type': 'token',
-                        'text': chunk_text,
+                        'text': accumulated_text,
                         'tokens': [int(t) for t in chunk_buffer],
                         'token_index': len(y_prefix) - len(chunk_buffer),
                         'chunk_size': len(chunk_buffer)
@@ -423,3 +424,143 @@ class Encoder:
             logger.finish()
 
         return estimated_plaintext, estimated_bytetext
+
+    def decode_stream(self, stegotext: Union[list, np.ndarray], chunk_size: int = 1) -> Generator[Dict, None, None]:
+        """
+        Stream the decoding process, showing the evolving "best guess" plaintext as each token is processed.
+
+        This visualizes Bayesian inference in action - as more tokens provide evidence,
+        the posterior distributions peak around the correct byte values.
+
+        Args:
+            stegotext: Token IDs of the stegotext to decode
+            chunk_size: Number of tokens to process before yielding an update
+
+        Yields:
+            Dict with:
+                - 'type': 'token' | 'complete'
+                - 'current_guess': Current best-guess plaintext (for 'token' type)
+                - 'tokens_processed': Number of tokens processed so far (for 'token' type)
+                - 'confidence': Average max probability across all byte distributions (for 'token' type)
+                - 'plaintext': Final decoded plaintext (for 'complete' type)
+        """
+        # Convert to list if needed
+        if isinstance(stegotext, np.ndarray):
+            stegotext = stegotext.tolist()
+
+        def generate_with_streaming():
+            """Generator that yields current guess after processing each token"""
+            # Initialize posterior for decoding (start with prior)
+            posterior = self._imec._initialize_posterior()
+            y_prefix = []
+
+            # Helper for decoding: we know the true y values (the stegotext)
+            # Use a lambda to create a selector that returns the known token values
+            def select_known_y_j(y_j_posterior, y_prefix, y=None):
+                """Select the known y value at current position"""
+                return stegotext[len(y_prefix)]
+
+            helper = self._imec._make_helper(
+                select_known_y_j,
+                x=None,
+                y=stegotext
+            )
+
+            token_buffer = []
+
+            # Process each token one by one
+            for token_idx, true_token in enumerate(stegotext):
+                # Check if this prefix is valid
+                if self._imec.nu.is_terminal(y_prefix):
+                    break
+
+                # Get conditional distribution for next token
+                y_j_conditional = self._imec._nu_conditional(y_prefix)
+
+                # Iterate: update posterior based on observing this token
+                y_j, y_j_likelihood, posterior = self._imec._iterate(
+                    helper, posterior, y_prefix, y_j_conditional
+                )
+
+                y_prefix.append(y_j)
+                token_buffer.append(y_j)
+
+                # After processing chunk_size tokens, yield current best guess
+                if len(token_buffer) >= chunk_size:
+                    # Extract current best guess by taking argmax of each byte's posterior
+                    current_ciphertext_guess = []
+                    confidences = []
+
+                    for component_dist in posterior.component_distributions:
+                        best_byte = int(component_dist.argmax())
+                        confidence = float(component_dist.max())
+                        current_ciphertext_guess.append(best_byte)
+                        confidences.append(confidence)
+
+                    # Decrypt the current guess
+                    current_bytetext_guess = bytes(
+                        [a ^ b for a, b in zip(current_ciphertext_guess, self._shared_private_key)]
+                    )
+
+                    # Decode to string
+                    current_plaintext_guess = current_bytetext_guess.decode("utf-8", errors="replace")
+
+                    # Calculate average confidence
+                    avg_confidence = float(np.mean(confidences))
+
+                    yield {
+                        'type': 'token',
+                        'current_guess': current_plaintext_guess,
+                        'tokens_processed': len(y_prefix),
+                        'total_tokens': len(stegotext),
+                        'confidence': round(avg_confidence, 4),
+                        'byte_confidences': [round(c, 4) for c in confidences]
+                    }
+
+                    token_buffer = []
+
+            # Yield any remaining tokens
+            if token_buffer:
+                # Extract final best guess
+                current_ciphertext_guess = []
+                confidences = []
+
+                for component_dist in posterior.component_distributions:
+                    best_byte = int(component_dist.argmax())
+                    confidence = float(component_dist.max())
+                    current_ciphertext_guess.append(best_byte)
+                    confidences.append(confidence)
+
+                current_bytetext_guess = bytes(
+                    [a ^ b for a, b in zip(current_ciphertext_guess, self._shared_private_key)]
+                )
+                current_plaintext_guess = current_bytetext_guess.decode("utf-8", errors="replace")
+                avg_confidence = float(np.mean(confidences))
+
+                yield {
+                    'type': 'token',
+                    'current_guess': current_plaintext_guess,
+                    'tokens_processed': len(y_prefix),
+                    'total_tokens': len(stegotext),
+                    'confidence': round(avg_confidence, 4),
+                    'byte_confidences': [round(c, 4) for c in confidences]
+                }
+
+            # Final decode: use the completed posterior
+            final_ciphertext = []
+            for component_dist in posterior.component_distributions:
+                best_byte = int(component_dist.argmax())
+                final_ciphertext.append(best_byte)
+
+            final_bytetext = bytes(
+                [a ^ b for a, b in zip(final_ciphertext, self._shared_private_key)]
+            )
+            final_plaintext = final_bytetext.decode("utf-8", errors="replace").rstrip('A')
+
+            yield {
+                'type': 'complete',
+                'plaintext': final_plaintext,
+                'total_tokens': len(stegotext)
+            }
+
+        yield from generate_with_streaming()

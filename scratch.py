@@ -10,6 +10,7 @@ IMPORTANT: Patch BEFORE importing Encoder!
 # logger.patch_now()  # Patch greedy_mec BEFORE importing Encoder
 
 # # Step 2: NOW import Encoder (will use patched greedy_mec)
+from test_streaming_encode import formatted_stegotext
 from tomato import Encoder
 
 # Step 3: Set up encoder
@@ -60,25 +61,27 @@ print("STREAMING ENCODE - Watch tokens appear in real-time!")
 print("=" * 70)
 print()
 
-stegotext = []
-formatted_stegotext = ""
-probs = {}
+stegotext, formatted_stegotext = encoder.encode(plaintext)
 
-for chunk in encoder.encode_stream(plaintext, chunk_size=1, calculate_failure_probs=False):
-    if chunk['type'] == 'token':
-        # Accumulate tokens and decode ALL tokens so far for proper text
-        stegotext.append(chunk['token_id'])
-        text = encoder._covertext_dist.decode(stegotext)
-        # Update the line in-place (carriage return clears line)
-        print(f"\r{text}", end='', flush=True)
-    elif chunk['type'] == 'complete':
-        formatted_stegotext = chunk['formatted_stegotext']
-        stegotext = chunk['stegotext']
-        probs = chunk['failure_probs']
-        print()  # Final newline after streaming completes
+# stegotext = []
+# formatted_stegotext = ""
+# probs = {}
+
+# for chunk in encoder.encode_stream(plaintext, chunk_size=1, calculate_failure_probs=False):
+#     if chunk['type'] == 'token':
+#         # Accumulate tokens and decode ALL tokens so far for proper text
+#         stegotext.append(chunk['token_id'])
+#         text = encoder._covertext_dist.decode(stegotext)
+#         # Update the line in-place (carriage return clears line)
+#         print(f"\r{text}", end='', flush=True)
+#     elif chunk['type'] == 'complete':
+#         formatted_stegotext = chunk['formatted_stegotext']
+#         stegotext = chunk['stegotext']
+#         probs = chunk['failure_probs']
+#         print()  # Final newline after streaming completes
 
 print(f"\n\nFormatted version:\n{formatted_stegotext}")
-print(f"Failure probs: {probs}")
+# print(f"Failure probs: {probs}")
 
 # # Save coupling logs for encode
 # logger.save_logs(

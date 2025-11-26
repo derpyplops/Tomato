@@ -11,7 +11,7 @@ from typing import Optional, Dict, Any
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, status
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse
 from pydantic import BaseModel, Field
 import json
 
@@ -29,6 +29,8 @@ DEFAULT_MODEL = "google/gemma-3-1b-it"
 DEFAULT_TEMPERATURE = 1.3
 KEY_FILE = ".server_key"
 KEY_LENGTH = 100  # 100 bytes for the shared key
+CIPHER_LEN = 15  # Fixed cipher length
+MAX_LEN = 200  # Fixed max stegotext length
 
 
 def load_or_create_key() -> bytes:
@@ -56,8 +58,6 @@ def load_or_create_key() -> bytes:
 class EncodeRequest(BaseModel):
     plaintext: str = Field(..., description="Secret message to encode")
     prompt: str = Field(..., description="Cover story prompt for stegotext generation")
-    cipher_len: int = Field(..., description="Length of the cipher in bytes", gt=0, le=100)
-    max_len: int = Field(..., description="Maximum length of generated stegotext", gt=0)
     calculate_failure_probs: bool = Field(False, description="Calculate failure probabilities (requires extra decoding pass, ~2x slower)")
 
 
@@ -69,8 +69,6 @@ class EncodeResponse(BaseModel):
 class DecodeRequest(BaseModel):
     stegotext: list = Field(..., description="Token IDs of the stegotext to decode")
     prompt: str = Field(..., description="Same cover story prompt used during encoding")
-    cipher_len: int = Field(..., description="Same cipher length used during encoding", gt=0, le=100)
-    max_len: int = Field(..., description="Same max_len used during encoding", gt=0)
 
 
 class DecodeResponse(BaseModel):
@@ -80,10 +78,14 @@ class DecodeResponse(BaseModel):
 class StreamEncodeRequest(BaseModel):
     plaintext: str = Field(..., description="Secret message to encode")
     prompt: str = Field(..., description="Cover story prompt for stegotext generation")
-    cipher_len: int = Field(..., description="Length of the cipher in bytes", gt=0, le=100)
-    max_len: int = Field(..., description="Maximum length of generated stegotext", gt=0)
     chunk_size: int = Field(1, description="Number of tokens per chunk (1 = token-by-token streaming)", gt=0)
     calculate_failure_probs: bool = Field(False, description="Calculate failure probabilities")
+
+
+class StreamDecodeRequest(BaseModel):
+    stegotext: list = Field(..., description="Token IDs of the stegotext to decode")
+    prompt: str = Field(..., description="Same cover story prompt used during encoding")
+    chunk_size: int = Field(10, description="Number of tokens to process before yielding update", gt=0)
 
 
 class ErrorResponse(BaseModel):
@@ -143,21 +145,29 @@ def convert_numpy_types(obj):
         return obj
 
 
-def create_encoder(prompt: str, cipher_len: int, max_len: int, shared_private_key: Optional[bytes] = None):
+def create_encoder(prompt: str, shared_private_key: Optional[bytes] = None):
     """Create a new encoder instance with the given parameters"""
-    print(f"🔄 Creating encoder: model={DEFAULT_MODEL}, cipher_len={cipher_len}, max_len={max_len}")
+    print(f"🔄 Creating encoder: model={DEFAULT_MODEL}, cipher_len={CIPHER_LEN}, max_len={MAX_LEN}")
 
     enc = Encoder(
         model_name=DEFAULT_MODEL,
         prompt=prompt,
-        cipher_len=cipher_len,
-        max_len=max_len,
+        cipher_len=CIPHER_LEN,
+        max_len=MAX_LEN,
         temperature=DEFAULT_TEMPERATURE,
         shared_private_key=shared_private_key
     )
 
     print("✓ Encoder created successfully")
     return enc
+
+
+@app.get("/", response_class=HTMLResponse, summary="Web Interface")
+async def root():
+    """Serve the web interface"""
+    html_path = Path(__file__).parent / "frontend.html"
+    with open(html_path, 'r') as f:
+        return f.read()
 
 
 @app.get("/health", summary="Health check")
@@ -198,15 +208,10 @@ async def encode(request: EncodeRequest):
 
     async with encoding_lock:
         try:
-            # Use the first cipher_len bytes of the server key
-            key_slice = server_key[:request.cipher_len]
-
             # Create new encoder for this request
             enc = create_encoder(
                 prompt=request.prompt,
-                cipher_len=request.cipher_len,
-                max_len=request.max_len,
-                shared_private_key=key_slice
+                shared_private_key=server_key
             )
 
             print(f"🔐 Encoding: {len(request.plaintext)} chars (failure_probs={request.calculate_failure_probs})")
@@ -261,8 +266,8 @@ async def decode(request: DecodeRequest):
     """
     Decode stegotext back into the original secret message.
 
-    Requires the same parameters used during encoding (prompt, cipher_len, max_len)
-    and the shared_private_key that was returned from the encode endpoint.
+    Requires the same prompt used during encoding.
+    The server uses fixed cipher_len=15 and max_len=200 for all operations.
 
     Only one decoding operation is allowed at a time to prevent RAM exhaustion.
     Returns 503 if another request is being processed.
@@ -280,8 +285,6 @@ async def decode(request: DecodeRequest):
             # Create encoder with the SAME parameters and key used during encoding
             enc = create_encoder(
                 prompt=request.prompt,
-                cipher_len=request.cipher_len,
-                max_len=request.max_len,
                 shared_private_key=server_key
             )
 
@@ -317,6 +320,85 @@ async def decode(request: DecodeRequest):
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Decoding failed: {str(e)}"
             )
+
+
+@app.post(
+    "/decode/stream",
+    responses={
+        503: {
+            "model": ErrorResponse,
+            "description": "Server is busy processing another request"
+        }
+    },
+    summary="Decode stegotext with streaming visualization of Bayesian inference"
+)
+async def decode_stream(request: StreamDecodeRequest):
+    """
+    Decode stegotext with streaming updates showing the evolving "best guess".
+
+    This visualizes Bayesian inference in real-time - as each token is processed,
+    the posterior distributions over byte values are updated, and you can see
+    the decoder's confidence increase as more evidence accumulates.
+
+    Returns Server-Sent Events (SSE) stream with:
+    - 'token': Current best guess after processing each chunk of tokens
+      - Shows the argmax plaintext guess
+      - Shows average confidence across all bytes
+    - 'complete': Final decoded plaintext
+
+    Only one operation is allowed at a time to prevent RAM exhaustion.
+    Returns 503 if another request is being processed.
+    """
+
+    # Try to acquire lock (non-blocking)
+    if encoding_lock.locked():
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Server is currently processing another request. Please try again."
+        )
+
+    async def event_generator():
+        async with encoding_lock:
+            try:
+                # Create encoder with the SAME parameters and key used during encoding
+                enc = create_encoder(
+                    prompt=request.prompt,
+                    shared_private_key=server_key
+                )
+
+                print(f"🔓 Streaming decode: {len(request.stegotext)} tokens (chunk_size={request.chunk_size})")
+
+                # Create the generator
+                stream_gen = enc.decode_stream(
+                    stegotext=request.stegotext,
+                    chunk_size=request.chunk_size
+                )
+
+                # Yield each chunk as SSE in real-time as they're generated
+                for chunk in stream_gen:
+                    # Convert to SSE format: "data: {json}\n\n"
+                    yield f"data: {json.dumps(chunk)}\n\n"
+                    # Allow other async tasks to run between updates
+                    await asyncio.sleep(0)
+
+                print(f"✓ Streaming decode complete")
+
+            except Exception as e:
+                print(f"❌ Streaming decode failed: {str(e)}")
+                error_event = {
+                    'type': 'error',
+                    'detail': str(e)
+                }
+                yield f"data: {json.dumps(error_event)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+        }
+    )
 
 
 @app.post(
@@ -357,15 +439,10 @@ async def encode_stream(request: StreamEncodeRequest):
     async def event_generator():
         async with encoding_lock:
             try:
-                # Use the first cipher_len bytes of the server key
-                key_slice = server_key[:request.cipher_len]
-
                 # Create new encoder for this request
                 enc = create_encoder(
                     prompt=request.prompt,
-                    cipher_len=request.cipher_len,
-                    max_len=request.max_len,
-                    shared_private_key=key_slice
+                    shared_private_key=server_key
                 )
 
                 print(f"🔐 Streaming encode: {len(request.plaintext)} chars (chunk_size={request.chunk_size})")
