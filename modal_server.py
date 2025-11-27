@@ -86,7 +86,7 @@ def get_build_config():
     gpu="H100",
     timeout=5 * 60,  # 5 minute request timeout
     volumes={VOLUME_PATH: volume},
-    container_idle_timeout=5 * 60,  # Keep warm for 5 minutes
+    scaledown_window=5 * 60,  # Keep warm for 5 minutes
 )
 class StegoServer:
     """Steganography server using TRT-LLM."""
@@ -172,7 +172,7 @@ class StegoServer:
             covertext_dist=covertext_dist
         )
 
-    @modal.web_endpoint(method="GET", docs=True)
+    @modal.fastapi_endpoint(method="GET", docs=True)
     def health(self) -> dict:
         """Health check endpoint."""
         return {
@@ -181,7 +181,7 @@ class StegoServer:
             "gpu": "H100"
         }
 
-    @modal.web_endpoint(method="POST", docs=True)
+    @modal.fastapi_endpoint(method="POST", docs=True)
     def encode(self, request: dict) -> dict:
         """
         Encode a secret message into natural-looking text.
@@ -212,7 +212,7 @@ class StegoServer:
             "formatted_stegotext": formatted_stegotext
         }
 
-    @modal.web_endpoint(method="POST", docs=True)
+    @modal.fastapi_endpoint(method="POST", docs=True)
     def decode(self, request: dict) -> dict:
         """
         Decode stegotext back to the original secret message.
@@ -238,7 +238,7 @@ class StegoServer:
 
         return {"plaintext": decoded_stripped}
 
-    @modal.web_endpoint(method="POST", docs=True)
+    @modal.fastapi_endpoint(method="POST", docs=True)
     def encode_stream(self, request: dict):
         """
         Encode a secret message with real-time streaming output.
@@ -286,7 +286,7 @@ class StegoServer:
             }
         )
 
-    @modal.web_endpoint(method="POST", docs=True)
+    @modal.fastapi_endpoint(method="POST", docs=True)
     def decode_stream(self, request: dict):
         """
         Decode stegotext with streaming visualization of Bayesian inference.
