@@ -41,6 +41,55 @@ class ModelMarginal:
         self.prompt = f"{prompt}\n"  # Add newline to separate prompt from query text
         self.mapping: Dict[Tuple[int, ...], np.ndarray] = {}
 
+    @classmethod
+    def with_custom_model(
+        cls,
+        model,
+        prompt: str,
+        max_len: int,
+        temperature: float,
+        k: int
+    ) -> "ModelMarginal":
+        """
+        Create a ModelMarginal with a custom model backend.
+
+        Use this factory method when you want to inject a custom model
+        (e.g., TensorRT-LLM wrapper) instead of using the default
+        HuggingFace-based ModelWrapper.
+
+        Args:
+            model: A model object with the same interface as ModelWrapper.
+                Must have: vocab_size, tokenizer, top_k_conditional() method.
+            prompt: Prompt to condition the generation on.
+            max_len: Maximum length of the generated text.
+            temperature: Temperature parameter for sampling.
+            k: Number of top elements to consider during sampling.
+
+        Returns:
+            A configured ModelMarginal instance.
+
+        Example:
+            from tomato.utils.trtllm_model_wrapper import TRTLLMModelWrapper
+
+            wrapper = TRTLLMModelWrapper(llm, tokenizer)
+            dist = ModelMarginal.with_custom_model(
+                model=wrapper,
+                prompt="Write a story:",
+                max_len=200,
+                temperature=1.3,
+                k=50
+            )
+        """
+        instance = cls.__new__(cls)
+        instance.max_len = max_len
+        instance.temperature = temperature
+        instance.k = k
+        instance.branching_factor = k
+        instance.lm_model = model
+        instance.prompt = f"{prompt}\n"
+        instance.mapping = {}
+        return instance
+
     def conditional(self, prefix: List[int]) -> np.ndarray:
         """
         Generates a conditional probability distribution over the next token given a prefix.

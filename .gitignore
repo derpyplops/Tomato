@@ -12,9 +12,10 @@ logs/
 # Server key (contains secrets)
 .server_key
 
-# Test files and temporary data
-test_*.py
-test_*.json
+# Test files and temporary data (but not tests/ directory)
+/test_*.py
+/test_*.json
+!tests/
 stegotext*.txt
 stegotext*.json
 encode_response.json
