@@ -286,6 +286,54 @@ class StegoServer:
             }
         )
 
+    @modal.web_endpoint(method="POST", docs=True)
+    def decode_stream(self, request: dict):
+        """
+        Decode stegotext with streaming visualization of Bayesian inference.
+
+        Request body: {"stegotext": [1, 2, 3, ...], "prompt": "Write a story:", "chunk_size": 10}
+
+        Returns Server-Sent Events showing the evolving "best guess" as each
+        token is processed. This visualizes how confidence increases as more
+        evidence accumulates.
+
+        Event types:
+        - 'token': Current best guess after processing a chunk of tokens
+        - 'complete': Final decoded plaintext
+        """
+        stegotext = request["stegotext"]
+        prompt = request["prompt"]
+        chunk_size = request.get("chunk_size", 10)
+
+        print(f"Streaming decode: {len(stegotext)} tokens (chunk_size={chunk_size})")
+
+        encoder = self._create_encoder(prompt)
+
+        def event_generator():
+            try:
+                for chunk in encoder.decode_stream(
+                    stegotext=stegotext,
+                    chunk_size=chunk_size
+                ):
+                    # Convert to SSE format
+                    yield f"data: {json.dumps(chunk)}\n\n"
+
+                print("Streaming decode complete")
+
+            except Exception as e:
+                print(f"Streaming decode failed: {str(e)}")
+                error_event = {'type': 'error', 'detail': str(e)}
+                yield f"data: {json.dumps(error_event)}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            }
+        )
+
     @modal.exit()
     def shutdown(self):
         if hasattr(self, 'llm'):
