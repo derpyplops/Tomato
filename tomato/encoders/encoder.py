@@ -22,21 +22,25 @@ class Encoder:
         max_len: int = 100,
         temperature: float = 1.0,
         k: int = 50,
-        model_name: str = "unsloth/mistral-7b-instruct-v0.3-bnb-4bit"
+        model_name: str = "unsloth/mistral-7b-instruct-v0.3-bnb-4bit",
+        covertext_dist: Optional[ModelMarginal] = None
     ) -> None:
         """
         Initializes the Encoder with the necessary parameters for encrypted steganography.
-        
+
         Args:
             cipher_len (int): Length of the cipher in bytes. Default is 15.
-            shared_private_key (bytes, optional): Shared private key for encryption. 
+            shared_private_key (bytes, optional): Shared private key for encryption.
                 If None, a random key is generated. Default is None.
             prompt (str): Prompt for the covertext model. Default is "Good evening."
             max_len (int): Maximum length of the covertext. Default is 100.
             temperature (float): Sampling temperature for the covertext model. Default is 1.0.
             k (int): The top-k sampling parameter for the covertext model. Default is 50.
-            model_name (str): Name of the language model used for generating covertext. 
+            model_name (str): Name of the language model used for generating covertext.
                 Default is "unsloth/mistral-7b-instruct-v0.3-bnb-4bit".
+            covertext_dist (ModelMarginal, optional): Pre-configured ModelMarginal instance.
+                If provided, this is used instead of creating a new one. This allows
+                injecting custom model backends (e.g., TensorRT-LLM). Default is None.
         """
 
         # For encrypted steganography, the sender and receiver share a private key.
@@ -49,13 +53,18 @@ class Encoder:
         self._k = k
 
         # The covertext distribution is a distribution over innocuous content.
-        self._covertext_dist = ModelMarginal(
-            prompt=self._prompt,
-            max_len=self._max_len,
-            temperature=self._temperature,
-            k=self._k,
-            model_name=self._model_name
-        )
+        if covertext_dist is not None:
+            # Use provided ModelMarginal (e.g., with TRT-LLM backend)
+            self._covertext_dist = covertext_dist
+        else:
+            # Create default ModelMarginal with HuggingFace backend
+            self._covertext_dist = ModelMarginal(
+                prompt=self._prompt,
+                max_len=self._max_len,
+                temperature=self._temperature,
+                k=self._k,
+                model_name=self._model_name
+            )
 
         # Ciphertext distribution (uniform random string)
         ciphertext_dist = RandomString(num_chars=2**8, string_len=self._cipher_len)
