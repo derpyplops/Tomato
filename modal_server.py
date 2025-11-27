@@ -11,11 +11,13 @@ Usage:
     modal serve modal_server.py
 """
 
+import json
 import secrets
 import time
 from pathlib import Path
 
 import modal
+from fastapi.responses import StreamingResponse
 
 # Configuration
 KEY_LENGTH = 100
@@ -235,6 +237,54 @@ class StegoServer:
         print(f"Decoded in {elapsed:.1f}s: '{decoded_stripped}'")
 
         return {"plaintext": decoded_stripped}
+
+    @modal.web_endpoint(method="POST", docs=True)
+    def encode_stream(self, request: dict):
+        """
+        Encode a secret message with real-time streaming output.
+
+        Request body: {"plaintext": "secret", "prompt": "Write a story:", "chunk_size": 1, "calculate_failure_probs": false}
+
+        Returns Server-Sent Events (SSE) with tokens as they're generated.
+
+        Event types:
+        - 'token': A token was generated (includes accumulated text)
+        - 'complete': Encoding finished (includes full stegotext)
+        """
+        plaintext = request["plaintext"]
+        prompt = request["prompt"]
+        chunk_size = request.get("chunk_size", 1)
+        calculate_failure_probs = request.get("calculate_failure_probs", False)
+
+        print(f"Streaming encode: {len(plaintext)} chars (chunk_size={chunk_size})")
+
+        encoder = self._create_encoder(prompt)
+
+        def event_generator():
+            try:
+                for chunk in encoder.encode_stream(
+                    plaintext=plaintext,
+                    chunk_size=chunk_size,
+                    calculate_failure_probs=calculate_failure_probs
+                ):
+                    # Convert to SSE format
+                    yield f"data: {json.dumps(chunk)}\n\n"
+
+                print("Streaming encode complete")
+
+            except Exception as e:
+                print(f"Streaming encode failed: {str(e)}")
+                error_event = {'type': 'error', 'detail': str(e)}
+                yield f"data: {json.dumps(error_event)}\n\n"
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            }
+        )
 
     @modal.exit()
     def shutdown(self):
