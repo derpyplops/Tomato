@@ -331,6 +331,14 @@
     </div>
 
     <script>
+        // Modal server endpoints
+        const API_BASE = 'https://jonathan-ng1--stego-server-stegoserver';
+        const ENDPOINTS = {
+            encodeStream: `${API_BASE}-encode-stream.modal.run`,
+            decode: `${API_BASE}-decode.modal.run`,
+            decodeStream: `${API_BASE}-decode-stream.modal.run`,
+        };
+
         let currentStegotext = [];
         let currentPrompt = "";
         let tokenToTextMap = [];  // Maps token index to accumulated text length
@@ -385,7 +393,7 @@
             document.querySelector('#encode-btn-text').parentElement.disabled = true;
 
             try {
-                const response = await fetch('/encode/stream', {
+                const response = await fetch(ENDPOINTS.encodeStream, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -451,7 +459,7 @@
             document.querySelector('#decode-btn-text').parentElement.disabled = true;
 
             try {
-                const response = await fetch('/decode', {
+                const response = await fetch(ENDPOINTS.decode, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
@@ -509,7 +517,7 @@
             const fullText = streamingOutput.textContent;
 
             try {
-                const response = await fetch('/decode/stream', {
+                const response = await fetch(ENDPOINTS.decodeStream, {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
