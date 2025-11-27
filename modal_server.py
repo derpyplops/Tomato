@@ -14,10 +14,8 @@ Usage:
 import secrets
 import time
 from pathlib import Path
-from typing import Optional
 
 import modal
-from pydantic import BaseModel, Field
 
 # Configuration
 KEY_LENGTH = 100
@@ -66,32 +64,6 @@ tensorrt_image = tensorrt_image.add_local_python_source("tomato")
 app = modal.App("stego-server")
 
 
-# Pydantic Models (matching server.py)
-class EncodeRequest(BaseModel):
-    plaintext: str = Field(..., description="Secret message to encode (max 15 bytes)")
-    prompt: str = Field(..., description="Cover story prompt for stegotext generation")
-
-
-class EncodeResponse(BaseModel):
-    stegotext: list = Field(..., description="Token IDs of the stegotext")
-    formatted_stegotext: str = Field(..., description="Formatted stegotext for display")
-
-
-class DecodeRequest(BaseModel):
-    stegotext: list = Field(..., description="Token IDs of the stegotext to decode")
-    prompt: str = Field(..., description="Same cover story prompt used during encoding")
-
-
-class DecodeResponse(BaseModel):
-    plaintext: str = Field(..., description="Decoded secret message")
-
-
-class HealthResponse(BaseModel):
-    status: str
-    model: str
-    gpu: str
-
-
 def get_build_config():
     from tensorrt_llm import BuildConfig
     from tensorrt_llm.plugin.plugin import PluginConfig
@@ -110,9 +82,9 @@ def get_build_config():
 @app.cls(
     image=tensorrt_image,
     gpu="H100",
-    timeout=15 * 60,
+    timeout=5 * 60,  # 5 minute request timeout
     volumes={VOLUME_PATH: volume},
-    container_idle_timeout=300,  # Keep warm for 5 minutes
+    container_idle_timeout=5 * 60,  # Keep warm for 5 minutes
 )
 class StegoServer:
     """Steganography server using TRT-LLM."""
@@ -173,95 +145,96 @@ class StegoServer:
 
         print("Server ready!")
 
-    def _create_imec(self, prompt: str):
-        """Create FIMEC instance for encode/decode."""
-        from mec import FIMEC
+    def _create_encoder(self, prompt: str):
+        """Create an Encoder instance for a request with the given prompt."""
+        from tomato.encoders.encoder import Encoder
         from tomato.utils.model_marginal import ModelMarginal
-        from tomato.utils.random_string import RandomString
 
-        # Create ModelMarginal with TRT-LLM backend
-        covertext_dist = ModelMarginal.__new__(ModelMarginal)
-        covertext_dist.max_len = MAX_LEN
-        covertext_dist.temperature = DEFAULT_TEMPERATURE
-        covertext_dist.k = DEFAULT_K
-        covertext_dist.branching_factor = DEFAULT_K
-        covertext_dist.lm_model = self.trtllm_wrapper
-        covertext_dist.prompt = f"{prompt}\n"
-        covertext_dist.mapping = {}
-
-        # Ciphertext distribution
-        ciphertext_dist = RandomString(num_chars=256, string_len=CIPHER_LEN)
-
-        return FIMEC(ciphertext_dist, covertext_dist), covertext_dist
-
-    @modal.web_endpoint(method="GET", docs=True)
-    def health(self) -> HealthResponse:
-        """Health check endpoint."""
-        return HealthResponse(
-            status="healthy",
-            model=MODEL_ID,
-            gpu="H100"
+        # Create a fresh ModelMarginal with the request's prompt using factory
+        covertext_dist = ModelMarginal.with_custom_model(
+            model=self.trtllm_wrapper,
+            prompt=prompt,
+            max_len=MAX_LEN,
+            temperature=DEFAULT_TEMPERATURE,
+            k=DEFAULT_K
         )
 
+        # Create Encoder with our TRT-LLM-backed ModelMarginal
+        return Encoder(
+            cipher_len=CIPHER_LEN,
+            shared_private_key=self.server_key,
+            prompt=prompt,
+            max_len=MAX_LEN,
+            temperature=DEFAULT_TEMPERATURE,
+            k=DEFAULT_K,
+            covertext_dist=covertext_dist
+        )
+
+    @modal.web_endpoint(method="GET", docs=True)
+    def health(self) -> dict:
+        """Health check endpoint."""
+        return {
+            "status": "healthy",
+            "model": MODEL_ID,
+            "gpu": "H100"
+        }
+
     @modal.web_endpoint(method="POST", docs=True)
-    def encode(self, request: EncodeRequest) -> EncodeResponse:
+    def encode(self, request: dict) -> dict:
         """
         Encode a secret message into natural-looking text.
+
+        Request body: {"plaintext": "secret message", "prompt": "Write a story:"}
 
         The plaintext is XOR-encrypted with the server's shared key,
         then encoded into stegotext using minimum entropy coupling.
         """
-        imec, covertext_dist = self._create_imec(request.prompt)
-        shared_key = self.server_key[:CIPHER_LEN]
+        plaintext = request["plaintext"]
+        prompt = request["prompt"]
 
-        # Prepare plaintext (pad or truncate to CIPHER_LEN)
-        bytetext = request.plaintext.encode("utf-8")
-        if len(bytetext) < CIPHER_LEN:
-            bytetext += b'A' * (CIPHER_LEN - len(bytetext))
-        bytetext = bytetext[:CIPHER_LEN]
-
-        # XOR encrypt
-        ciphertext = [a ^ b for a, b in zip(bytetext, shared_key)]
-
-        # Encode
-        print(f"Encoding {len(request.plaintext)} chars...")
+        print(f"Encoding {len(plaintext)} chars...")
         start = time.perf_counter()
-        stegotext_tokens, log_prob = imec.sample_y_given_x(ciphertext)
-        elapsed = time.perf_counter() - start
 
-        formatted_stegotext = covertext_dist.decode(list(stegotext_tokens))
-        print(f"Encoded in {elapsed:.1f}s: {formatted_stegotext[:50]}...")
-
-        return EncodeResponse(
-            stegotext=list(stegotext_tokens),
-            formatted_stegotext=formatted_stegotext
+        encoder = self._create_encoder(prompt)
+        formatted_stegotext, stegotext, _ = encoder.encode(
+            plaintext,
+            debug=False,
+            calculate_failure_probs=False
         )
 
+        elapsed = time.perf_counter() - start
+        print(f"Encoded in {elapsed:.1f}s: {formatted_stegotext[:50]}...")
+
+        return {
+            "stegotext": [int(t) for t in stegotext],
+            "formatted_stegotext": formatted_stegotext
+        }
+
     @modal.web_endpoint(method="POST", docs=True)
-    def decode(self, request: DecodeRequest) -> DecodeResponse:
+    def decode(self, request: dict) -> dict:
         """
         Decode stegotext back to the original secret message.
 
+        Request body: {"stegotext": [1, 2, 3, ...], "prompt": "Write a story:"}
+
         Requires the same prompt used during encoding.
         """
-        imec, covertext_dist = self._create_imec(request.prompt)
-        shared_key = self.server_key[:CIPHER_LEN]
+        stegotext = request["stegotext"]
+        prompt = request["prompt"]
 
-        # Decode
-        print(f"Decoding {len(request.stegotext)} tokens...")
+        print(f"Decoding {len(stegotext)} tokens...")
         start = time.perf_counter()
-        estimated_ciphertext, _ = imec.estimate_x_given_y(request.stegotext)
-        elapsed = time.perf_counter() - start
 
-        # XOR decrypt
-        estimated_bytetext = bytes([a ^ b for a, b in zip(estimated_ciphertext, shared_key)])
-        decoded_plaintext = estimated_bytetext.decode("utf-8", errors="replace")
+        encoder = self._create_encoder(prompt)
+        estimated_plaintext, _ = encoder.decode(stegotext, debug=False)
 
         # Strip padding
-        decoded_stripped = decoded_plaintext.rstrip("A")
+        decoded_stripped = estimated_plaintext.rstrip("A")
+
+        elapsed = time.perf_counter() - start
         print(f"Decoded in {elapsed:.1f}s: '{decoded_stripped}'")
 
-        return DecodeResponse(plaintext=decoded_stripped)
+        return {"plaintext": decoded_stripped}
 
     @modal.exit()
     def shutdown(self):
@@ -280,20 +253,18 @@ def test():
     print(f"Health: {health}")
 
     # Test encode
-    encode_req = EncodeRequest(
-        plaintext="hello",
-        prompt="Write a short story about a magical forest:"
-    )
-    encode_resp = server.encode.remote(encode_req)
+    encode_resp = server.encode.remote(request={
+        "plaintext": "hello",
+        "prompt": "Write a short story about a magical forest:"
+    })
     print(f"\nEncoded:")
-    print(f"  Stegotext: {encode_resp.formatted_stegotext[:100]}...")
-    print(f"  Tokens: {len(encode_resp.stegotext)}")
+    print(f"  Stegotext: {encode_resp['formatted_stegotext'][:100]}...")
+    print(f"  Tokens: {len(encode_resp['stegotext'])}")
 
     # Test decode
-    decode_req = DecodeRequest(
-        stegotext=encode_resp.stegotext,
-        prompt="Write a short story about a magical forest:"
-    )
-    decode_resp = server.decode.remote(decode_req)
-    print(f"\nDecoded: '{decode_resp.plaintext}'")
-    print(f"Match: {decode_resp.plaintext == 'hello'}")
+    decode_resp = server.decode.remote(request={
+        "stegotext": encode_resp['stegotext'],
+        "prompt": "Write a short story about a magical forest:"
+    })
+    print(f"\nDecoded: '{decode_resp['plaintext']}'")
+    print(f"Match: {decode_resp['plaintext'] == 'hello'}")
