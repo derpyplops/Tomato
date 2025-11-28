@@ -132,7 +132,28 @@ class Encoder:
 
         return results
 
-    def encode(self, plaintext: str = "Attack at dawn!", debug: bool = False, calculate_failure_probs: bool = True) -> Tuple[str, np.ndarray, Dict]:
+    def _calculate_byte_entropies(self, posterior) -> List[float]:
+        """
+        Calculate Shannon entropy for each byte from posterior distributions.
+
+        Args:
+            posterior: FactoredPosterior with component_distributions attribute
+
+        Returns:
+            List[float]: Entropy in bits for each byte (0.0 = certain, ~8.0 = uniform)
+        """
+        entropies = []
+        for component_dist in posterior.component_distributions:
+            # Avoid log(0) by filtering zero probabilities
+            nonzero_probs = component_dist[component_dist > 0]
+            if len(nonzero_probs) > 0:
+                entropy = float(-(nonzero_probs * np.log2(nonzero_probs)).sum())
+            else:
+                entropy = 0.0
+            entropies.append(entropy)
+        return entropies
+
+    def encode(self, plaintext: str = "Attack at dawn!", debug: bool = False, calculate_failure_probs: bool = True) -> Tuple[str, np.ndarray, Dict, List[List[float]]]:
         """
         Encodes the plaintext into stegotext using encrypted steganography.
 
@@ -145,16 +166,19 @@ class Encoder:
                 probabilities (requires additional decoding pass). Default is True.
 
         Returns:
-            Tuple[str, np.ndarray, Dict]: The formatted stegotext, original stegotext, and
-            failure probability analysis (empty dict if calculate_failure_probs=False) containing:
-                - 'per_byte_p_correct': List[float] - probability each byte decodes correctly
-                - 'per_byte_p_fail': List[float] - probability each byte fails
-                - 'entropies': List[float] - Shannon entropy per byte (bits)
-                - 'p_success_overall': float - probability all bytes decode correctly
-                - 'p_fail_overall': float - probability at least one byte fails
-                - 'avg_entropy': float - average entropy across bytes
-                - 'num_weak_bytes': int - count of bytes with p_fail > 0.1
-                - 'num_strong_bytes': int - count of bytes with p_fail < 0.01
+            Tuple[str, np.ndarray, Dict, List[List[float]]]:
+                - formatted_stegotext: The formatted stegotext string
+                - stegotext: Token IDs as numpy array
+                - failure_probs: Failure probability analysis (empty dict if disabled) containing:
+                    - 'per_byte_p_correct': List[float] - probability each byte decodes correctly
+                    - 'per_byte_p_fail': List[float] - probability each byte fails
+                    - 'entropies': List[float] - Shannon entropy per byte (bits)
+                    - 'p_success_overall': float - probability all bytes decode correctly
+                    - 'p_fail_overall': float - probability at least one byte fails
+                    - 'avg_entropy': float - average entropy across bytes
+                    - 'num_weak_bytes': int - count of bytes with p_fail > 0.1
+                    - 'num_strong_bytes': int - count of bytes with p_fail < 0.01
+                - byte_entropy_history: List of lists, byte_entropy_history[byte_idx][token_idx]
         """
         # Setup debug logging if requested
         logger = None
@@ -187,13 +211,28 @@ class Encoder:
             logger.logs['true_ciphertext'] = [int(c) for c in ciphertext]
             logger.logs['true_bytetext'] = [int(b) for b in bytetext]
 
-        # Generate stegotext with the ciphertext hidden inside.
-        stegotext, _ = self._imec.sample_y_given_x(ciphertext)
+        # Generate stegotext token-by-token to track entropy history
+        helper = self._imec._make_helper(self._imec._select_sample_y_j, x=ciphertext, y=None)
+        posterior = self._imec._initialize_posterior()
+        y_prefix = []
+        byte_entropy_history = [[] for _ in range(self._cipher_len)]
 
-        # Optionally compute posterior distributions to calculate failure probabilities
-        # This predicts decoding reliability at encoding time (requires extra decoding pass)
+        while not self._imec.nu.is_terminal(y_prefix):
+            y_j_conditional = self._imec._nu_conditional(y_prefix)
+            y_j, y_j_likelihood, posterior = self._imec._iterate(
+                helper, posterior, y_prefix, y_j_conditional
+            )
+            y_prefix.append(y_j)
+
+            # Track entropy after each token
+            current_entropies = self._calculate_byte_entropies(posterior)
+            for i, h in enumerate(current_entropies):
+                byte_entropy_history[i].append(h)
+
+        stegotext = y_prefix
+
+        # Optionally compute failure probabilities from final posterior
         if calculate_failure_probs:
-            posterior = self._imec._x_given_y(stegotext)
             failure_probs = self._calculate_failure_probabilities(posterior, ciphertext)
         else:
             failure_probs = {}
@@ -220,7 +259,7 @@ class Encoder:
             logger.log_result(result_data)
             logger.finish()
 
-        return formatted_stegotext, stegotext, failure_probs
+        return formatted_stegotext, stegotext, failure_probs, byte_entropy_history
 
     def encode_stream(
         self,
@@ -246,8 +285,10 @@ class Encoder:
                 - 'token_id': Token ID (for 'token' type with chunk_size=1)
                 - 'tokens': Token IDs for this chunk (for 'token' type with chunk_size>1)
                 - 'token_index': Current token index (for 'token' type)
+                - 'byte_entropies': Current entropy (bits) per byte (for 'token' type)
                 - 'total_tokens': Total number of tokens (for 'complete' type)
                 - 'failure_probs': Failure probability dict (for 'complete' type if enabled)
+                - 'byte_entropy_history': Per-byte entropy at each token step (for 'complete' type)
         """
         # Convert plaintext to bytes
         bytetext = plaintext.encode("utf-8")
@@ -274,6 +315,9 @@ class Encoder:
             likelihoods = []
             chunk_buffer = []
 
+            # Initialize entropy history tracking
+            byte_entropy_history = [[] for _ in range(self._cipher_len)]
+
             # Generate tokens one by one
             while not self._imec.nu.is_terminal(y_prefix):
                 y_j_conditional = self._imec._nu_conditional(y_prefix)
@@ -282,6 +326,11 @@ class Encoder:
                 )
                 y_prefix.append(y_j)
                 likelihoods.append(y_j_likelihood)
+
+                # Calculate current byte entropies
+                current_entropies = self._calculate_byte_entropies(posterior)
+                for i, h in enumerate(current_entropies):
+                    byte_entropy_history[i].append(h)
 
                 # Yield token immediately as it's generated!
                 chunk_buffer.append(y_j)
@@ -295,7 +344,8 @@ class Encoder:
                             'type': 'token',
                             'text': accumulated_text,
                             'token_id': int(chunk_buffer[0]),
-                            'token_index': len(y_prefix) - 1
+                            'token_index': len(y_prefix) - 1,
+                            'byte_entropies': current_entropies
                         }
                     else:
                         yield {
@@ -303,7 +353,8 @@ class Encoder:
                             'text': accumulated_text,
                             'tokens': [int(t) for t in chunk_buffer],
                             'token_index': len(y_prefix) - len(chunk_buffer),
-                            'chunk_size': len(chunk_buffer)
+                            'chunk_size': len(chunk_buffer),
+                            'byte_entropies': current_entropies
                         }
 
                     chunk_buffer = []
@@ -318,7 +369,8 @@ class Encoder:
                             'type': 'token',
                             'text': accumulated_text,
                             'token_id': int(token_id),
-                            'token_index': len(y_prefix) - len(chunk_buffer) + i
+                            'token_index': len(y_prefix) - len(chunk_buffer) + i,
+                            'byte_entropies': current_entropies
                         }
                 else:
                     yield {
@@ -326,7 +378,8 @@ class Encoder:
                         'text': accumulated_text,
                         'tokens': [int(t) for t in chunk_buffer],
                         'token_index': len(y_prefix) - len(chunk_buffer),
-                        'chunk_size': len(chunk_buffer)
+                        'chunk_size': len(chunk_buffer),
+                        'byte_entropies': current_entropies
                     }
 
             # Optionally calculate failure probabilities
@@ -346,7 +399,8 @@ class Encoder:
                 'total_tokens': int(len(y_prefix)),
                 'formatted_stegotext': formatted_stegotext,
                 'stegotext': [int(t) for t in y_prefix],
-                'failure_probs': failure_probs if calculate_failure_probs else {}
+                'failure_probs': failure_probs if calculate_failure_probs else {},
+                'byte_entropy_history': byte_entropy_history
             }
 
         # Yield from the streaming generator

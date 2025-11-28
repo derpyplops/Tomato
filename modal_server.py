@@ -21,8 +21,8 @@ from fastapi.responses import StreamingResponse
 
 # Configuration
 KEY_LENGTH = 100
-CIPHER_LEN = 15
-MAX_LEN = 200
+CIPHER_LEN = 100
+MAX_LEN = 1000
 DEFAULT_TEMPERATURE = 1.3
 DEFAULT_K = 50
 
@@ -190,6 +190,11 @@ class StegoServer:
 
         The plaintext is XOR-encrypted with the server's shared key,
         then encoded into stegotext using minimum entropy coupling.
+
+        Returns:
+            - stegotext: Token ID list for decoding
+            - formatted_stegotext: Human-readable text
+            - byte_entropy_history: Per-byte entropy at each token step
         """
         plaintext = request["plaintext"]
         prompt = request["prompt"]
@@ -198,7 +203,7 @@ class StegoServer:
         start = time.perf_counter()
 
         encoder = self._create_encoder(prompt)
-        formatted_stegotext, stegotext, _ = encoder.encode(
+        formatted_stegotext, stegotext, _, byte_entropy_history = encoder.encode(
             plaintext,
             debug=False,
             calculate_failure_probs=False
@@ -209,7 +214,8 @@ class StegoServer:
 
         return {
             "stegotext": [int(t) for t in stegotext],
-            "formatted_stegotext": formatted_stegotext
+            "formatted_stegotext": formatted_stegotext,
+            "byte_entropy_history": byte_entropy_history
         }
 
     @modal.fastapi_endpoint(method="POST", docs=True)
@@ -248,8 +254,15 @@ class StegoServer:
         Returns Server-Sent Events (SSE) with tokens as they're generated.
 
         Event types:
-        - 'token': A token was generated (includes accumulated text)
-        - 'complete': Encoding finished (includes full stegotext)
+        - 'token': A token was generated
+            - text: Accumulated text so far
+            - token_id: Token ID (chunk_size=1) or tokens: list of IDs
+            - token_index: Position in sequence
+            - byte_entropies: Current entropy (bits) for each byte being encoded
+        - 'complete': Encoding finished
+            - stegotext: Full token ID list
+            - formatted_stegotext: Human-readable text
+            - byte_entropy_history: Full entropy history per byte
         """
         plaintext = request["plaintext"]
         prompt = request["prompt"]
