@@ -827,12 +827,18 @@
                                         confidenceText.textContent = '100% confident - Complete!';
                                         confidenceBar.style.width = '100%';
 
-                                        // Highlight all text as complete
-                                        updateTextHighlight(streamingOutput, fullText, data.total_tokens, data.total_tokens);
+                                        // Highlight all text as complete (use tokens_processed for early termination)
+                                        const processedTokens = data.tokens_processed || data.total_tokens;
+                                        updateTextHighlight(streamingOutput, fullText, processedTokens, data.total_tokens);
 
-                                        // Update badge
-                                        badge.textContent = '✅ Decoding complete!';
-                                        badge.style.background = 'linear-gradient(135deg, #28a745, #20c997)';
+                                        // Update badge based on early termination
+                                        if (data.early_termination) {
+                                            badge.textContent = `⚡ Decoded early! (saved ${data.tokens_saved} tokens)`;
+                                            badge.style.background = 'linear-gradient(135deg, #17a2b8, #20c997)';
+                                        } else {
+                                            badge.textContent = '✅ Decoding complete!';
+                                            badge.style.background = 'linear-gradient(135deg, #28a745, #20c997)';
+                                        }
                                     }
                                 } catch (e) {
                                     console.warn('Failed to parse SSE data:', line, e);

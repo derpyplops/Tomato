@@ -304,21 +304,36 @@ class StegoServer:
         """
         Decode stegotext with streaming visualization of Bayesian inference.
 
-        Request body: {"stegotext": [1, 2, 3, ...], "prompt": "Write a story:", "chunk_size": 10}
+        Request body:
+            stegotext: [1, 2, 3, ...] - Token IDs from encoding
+            prompt: "Write a story:" - Must match encoding prompt
+            chunk_size: 10 - Tokens per update (default: 10)
+            early_termination_threshold: 0.01 - Entropy threshold for early exit (default: 0.01 bits)
 
         Returns Server-Sent Events showing the evolving "best guess" as each
         token is processed. This visualizes how confidence increases as more
         evidence accumulates.
 
+        Supports early termination: when all bytes reach near-100% confidence
+        (entropy below threshold), decoding stops early to save time.
+
         Event types:
         - 'token': Current best guess after processing a chunk of tokens
+            - current_guess: Best plaintext guess so far
+            - tokens_processed: Number of tokens processed
+            - total_tokens: Total tokens in stegotext
+            - confidence: Average confidence across all bytes
         - 'complete': Final decoded plaintext
+            - plaintext: Decoded message
+            - early_termination: Boolean, true if exited early
+            - tokens_saved: Number of tokens skipped (if early termination)
         """
         stegotext = request["stegotext"]
         prompt = request["prompt"]
         chunk_size = request.get("chunk_size", 10)
+        early_termination_threshold = request.get("early_termination_threshold", 0.01)
 
-        print(f"Streaming decode: {len(stegotext)} tokens (chunk_size={chunk_size})")
+        print(f"Streaming decode: {len(stegotext)} tokens (chunk_size={chunk_size}, threshold={early_termination_threshold})")
 
         encoder = self._create_encoder(prompt)
 
@@ -326,7 +341,8 @@ class StegoServer:
             try:
                 for chunk in encoder.decode_stream(
                     stegotext=stegotext,
-                    chunk_size=chunk_size
+                    chunk_size=chunk_size,
+                    early_termination_threshold=early_termination_threshold
                 ):
                     # Convert to SSE format
                     yield f"data: {json.dumps(chunk)}\n\n"

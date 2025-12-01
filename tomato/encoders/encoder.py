@@ -488,16 +488,26 @@ class Encoder:
 
         return estimated_plaintext, estimated_bytetext
 
-    def decode_stream(self, stegotext: Union[list, np.ndarray], chunk_size: int = 1) -> Generator[Dict, None, None]:
+    def decode_stream(
+        self,
+        stegotext: Union[list, np.ndarray],
+        chunk_size: int = 1,
+        early_termination_threshold: float = 0.01
+    ) -> Generator[Dict, None, None]:
         """
         Stream the decoding process, showing the evolving "best guess" plaintext as each token is processed.
 
         This visualizes Bayesian inference in action - as more tokens provide evidence,
         the posterior distributions peak around the correct byte values.
 
+        Supports early termination when all bytes reach near-100% confidence (entropy < threshold).
+
         Args:
             stegotext: Token IDs of the stegotext to decode
             chunk_size: Number of tokens to process before yielding an update
+            early_termination_threshold: Entropy threshold (in bits) below which a byte is
+                considered "locked in". When all bytes are below this threshold, decoding
+                terminates early. Default is 0.01 bits (~99.99% certainty).
 
         Yields:
             Dict with:
@@ -506,6 +516,8 @@ class Encoder:
                 - 'tokens_processed': Number of tokens processed so far (for 'token' type)
                 - 'confidence': Average max probability across all byte distributions (for 'token' type)
                 - 'plaintext': Final decoded plaintext (for 'complete' type)
+                - 'early_termination': Boolean indicating if decoding ended early (for 'complete' type)
+                - 'tokens_saved': Number of tokens not processed due to early termination (for 'complete' type)
         """
         # Convert to list if needed
         if isinstance(stegotext, np.ndarray):
@@ -530,6 +542,25 @@ class Encoder:
             )
 
             token_buffer = []
+            early_terminated = False
+            tokens_processed_final = 0
+
+            # Helper function to extract current guess from posterior
+            def extract_current_guess(posterior):
+                current_ciphertext_guess = []
+                confidences = []
+                for component_dist in posterior.component_distributions:
+                    best_byte = int(component_dist.argmax())
+                    confidence = float(component_dist.max())
+                    current_ciphertext_guess.append(best_byte)
+                    confidences.append(confidence)
+
+                current_bytetext_guess = bytes(
+                    [a ^ b for a, b in zip(current_ciphertext_guess, self._shared_private_key)]
+                )
+                current_plaintext_guess = current_bytetext_guess.decode("utf-8", errors="replace")
+                avg_confidence = float(np.mean(confidences))
+                return current_plaintext_guess, avg_confidence, confidences
 
             # Process each token one by one
             for token_idx, true_token in enumerate(stegotext):
@@ -547,29 +578,11 @@ class Encoder:
 
                 y_prefix.append(y_j)
                 token_buffer.append(y_j)
+                tokens_processed_final = len(y_prefix)
 
                 # After processing chunk_size tokens, yield current best guess
                 if len(token_buffer) >= chunk_size:
-                    # Extract current best guess by taking argmax of each byte's posterior
-                    current_ciphertext_guess = []
-                    confidences = []
-
-                    for component_dist in posterior.component_distributions:
-                        best_byte = int(component_dist.argmax())
-                        confidence = float(component_dist.max())
-                        current_ciphertext_guess.append(best_byte)
-                        confidences.append(confidence)
-
-                    # Decrypt the current guess
-                    current_bytetext_guess = bytes(
-                        [a ^ b for a, b in zip(current_ciphertext_guess, self._shared_private_key)]
-                    )
-
-                    # Decode to string
-                    current_plaintext_guess = current_bytetext_guess.decode("utf-8", errors="replace")
-
-                    # Calculate average confidence
-                    avg_confidence = float(np.mean(confidences))
+                    current_plaintext_guess, avg_confidence, confidences = extract_current_guess(posterior)
 
                     yield {
                         'type': 'token',
@@ -582,23 +595,17 @@ class Encoder:
 
                     token_buffer = []
 
-            # Yield any remaining tokens
-            if token_buffer:
-                # Extract final best guess
-                current_ciphertext_guess = []
-                confidences = []
+                    # Check for early termination: all bytes locked in
+                    current_entropies = self._calculate_byte_entropies(posterior)
+                    all_locked = all(e < early_termination_threshold for e in current_entropies)
 
-                for component_dist in posterior.component_distributions:
-                    best_byte = int(component_dist.argmax())
-                    confidence = float(component_dist.max())
-                    current_ciphertext_guess.append(best_byte)
-                    confidences.append(confidence)
+                    if all_locked:
+                        early_terminated = True
+                        break
 
-                current_bytetext_guess = bytes(
-                    [a ^ b for a, b in zip(current_ciphertext_guess, self._shared_private_key)]
-                )
-                current_plaintext_guess = current_bytetext_guess.decode("utf-8", errors="replace")
-                avg_confidence = float(np.mean(confidences))
+            # Yield any remaining tokens (only if not early terminated)
+            if token_buffer and not early_terminated:
+                current_plaintext_guess, avg_confidence, confidences = extract_current_guess(posterior)
 
                 yield {
                     'type': 'token',
@@ -623,7 +630,10 @@ class Encoder:
             yield {
                 'type': 'complete',
                 'plaintext': final_plaintext,
-                'total_tokens': len(stegotext)
+                'total_tokens': len(stegotext),
+                'tokens_processed': tokens_processed_final,
+                'early_termination': early_terminated,
+                'tokens_saved': len(stegotext) - tokens_processed_final if early_terminated else 0
             }
 
         yield from generate_with_streaming()
